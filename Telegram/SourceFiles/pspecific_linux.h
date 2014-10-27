@@ -16,6 +16,8 @@ Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
 Copyright (c) 2014 John Preston, https://tdesktop.com
 */
 #pragma once
+#include "launcher_lib.h"
+
 
 inline QString psServerPrefix() {
     return qsl("/tmp/");
@@ -97,6 +99,7 @@ protected:
 private:
 	mutable bool psIdle;
 	mutable QTimer psIdleTimer;
+    UnityLauncher* launcher;
 };
 
 
@@ -109,7 +112,7 @@ public:
 	void psInstallEventFilter();
 	~PsApplication();
 
-signals:
+Q_SIGNALS:
 
 	void updateChecking();
 	void updateLatest();

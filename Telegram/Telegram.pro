@@ -249,6 +249,7 @@ CONFIG += precompile_header
 
 PRECOMPILED_HEADER = ./SourceFiles/stdafx.h
 
+
 QMAKE_CXXFLAGS_WARN_ON += -Wno-unused-result -Wno-unused-parameter -Wno-unused-variable -Wno-switch -Wno-comment -Wno-unused-but-set-variable
 
 CONFIG(release, debug|release) {
@@ -262,10 +263,11 @@ INCLUDEPATH += ./../../Libraries/QtStatic/qtbase/include/QtGui/5.3.1/QtGui\
                ./../../Libraries/QtStatic/qtbase/include/QtCore/5.3.1/QtCore\
                ./../../Libraries/QtStatic/qtbase/include\
                /usr/local/include/opus\
+               /usr/include/opus\
                ./SourceFiles\
                ./GeneratedFiles
 LIBS += -lcrypto -lssl -lz -ldl -llzma -lexif -lopus -lopusfile -logg -lopenal
-LIBS += ./../../../Libraries/QtStatic/qtbase/plugins/platforminputcontexts/libcomposeplatforminputcontextplugin.a
+LIBS += ./../../Libraries/QtStatic/qtbase/plugins/platforminputcontexts/libcomposeplatforminputcontextplugin.a
 
 RESOURCES += \
     ./SourceFiles/telegram_linux.qrc
@@ -274,3 +276,14 @@ OTHER_FILES += \
     Resources/style_classes.txt \
     Resources/style.txt \
     Resources/lang.txt
+
+linux {
+INCLUDEPATH += /usr/include/glib-2.0/\
+               /usr/include/libdbusmenu-glib-0.4\
+               /usr/include/dee-1.0\
+               /usr/lib/x86_64-linux-gnu/glib-2.0/include/
+    SOURCES += ./SourceFiles/launcher_lib.cpp
+    HEADERS += ./SourceFiles/launcher_lib.h
+
+    LIBS += -lunity
+}

@@ -15,8 +15,9 @@ GNU General Public License for more details.
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
 Copyright (c) 2014 John Preston, https://tdesktop.com
 */
-#include "stdafx.h"
 #include "pspecific.h"
+#include "stdafx.h"
+
 
 #include "lang.h"
 #include "application.h"
@@ -53,6 +54,7 @@ PsMainWindow::PsMainWindow(QWidget *parent) : QMainWindow(parent),
 posInited(false), trayIcon(0), trayIconMenu(0), icon256(qsl(":/gui/art/iconround256.png")) {
     connect(&psIdleTimer, SIGNAL(timeout()), this, SLOT(psIdleTimeout()));
     psIdleTimer.setSingleShot(false);
+    launcher = UnityLauncher::create("telegram.desktop");
 }
 
 void PsMainWindow::psNotIdle() const {
@@ -120,7 +122,10 @@ void PsMainWindow::psUpdateCounter() {
     setWindowTitle((counter > 0) ? qsl("Telegram (%1)").arg(counter) : qsl("Telegram"));
 
     QString cnt = (counter < 1000) ? QString("%1").arg(counter) : QString("..%1").arg(counter % 100, 2, 10, QChar('0'));
+
     //_private.setWindowBadge(counter ? cnt : QString());
+    launcher->setCountEnabled(counter > 0);
+    launcher->setCount(counter);
 }
 
 void PsMainWindow::psUpdateDelegate() {
@@ -277,6 +282,7 @@ void PsMainWindow::psFlash() {
 
 PsMainWindow::~PsMainWindow() {
 	finished = true;
+    delete launcher;
 }
 
 namespace {
@@ -429,7 +435,7 @@ void PsUpdateDownloader::partMetaGot() {
 					QMutexLocker lock(&mutex);
 					full = m.captured(1).toInt();
 				}
-				emit App::app()->updateDownloading(already, full);
+                Q_EMIT App::app()->updateDownloading(already, full);
 			}
 		}
 	}
@@ -482,7 +488,7 @@ void PsUpdateDownloader::partFinished(qint64 got, qint64 total) {
 		outputFile.close();
 		unpackUpdate();
 	} else {
-		emit App::app()->updateDownloading(already, full);
+        Q_EMIT App::app()->updateDownloading(already, full);
 	}
 }
 
@@ -501,7 +507,7 @@ void PsUpdateDownloader::partFailed(QNetworkReply::NetworkError e) {
 		}
 	}
 	LOG(("Update Error: failed to download part starting from %1, error %2").arg(already).arg(e));
-	emit App::app()->updateFailed();
+    Q_EMIT App::app()->updateFailed();
 }
 
 bool _removeDirectory(const QString &path) { // from http://stackoverflow.com/questions/2256945/removing-a-non-empty-directory-programmatically-in-c-or-c
@@ -541,7 +547,7 @@ void PsUpdateDownloader::deleteDir(const QString &dir) {
 
 void PsUpdateDownloader::fatalFail() {
 	clearAll();
-	emit App::app()->updateFailed();
+    Q_EMIT App::app()->updateFailed();
 }
 
 void PsUpdateDownloader::clearAll() {
@@ -759,7 +765,7 @@ void PsUpdateDownloader::unpackUpdate() {
 	deleteDir(tempDirPath);
 	outputFile.remove();
 
-    emit App::app()->updateReady();
+    Q_EMIT App::app()->updateReady();
 }
 
 PsUpdateDownloader::~PsUpdateDownloader() {
