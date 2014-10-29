@@ -1,11 +1,13 @@
 #ifndef LAUNCHER_LIB_H
 #define LAUNCHER_LIB_H
 
+
 class UnityLauncher
 {
 
 private:
     UnityLauncher(const char* desktopId);
+
     void* entry;
 
 public:

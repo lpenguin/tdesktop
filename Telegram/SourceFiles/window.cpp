@@ -274,7 +274,7 @@ void NotifyWindow::mousePressEvent(QMouseEvent *e) {
 	} else if (history) {
 		App::wnd()->showFromTray();
 		App::wnd()->hideSettings();
-		App::main()->showPeer(history->peer->id, 0, false, true);
+        App::main()->showPeer(history->peer->id, 0, false, true);
 		e->ignore();
 	}
 }

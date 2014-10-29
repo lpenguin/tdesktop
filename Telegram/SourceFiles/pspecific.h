@@ -17,7 +17,9 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 */
 #pragma once
 
-
+#include <QtWidgets/QMainWindow>
+#include <QtNetwork/QNetworkReply>
+#include "sysbuttons.h"
 
 #ifdef Q_OS_MAC
 #include "pspecific_mac.h"
@@ -30,6 +32,4 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 #ifdef Q_OS_WIN
 #include "pspecific_wnd.h"
 #endif
-#include <QtWidgets/QMainWindow>
-#include <QtNetwork/QNetworkReply>
-#include "sysbuttons.h"
+

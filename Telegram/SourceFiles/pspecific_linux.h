@@ -112,7 +112,7 @@ public:
 	void psInstallEventFilter();
 	~PsApplication();
 
-Q_SIGNALS:
+signals:
 
 	void updateChecking();
 	void updateLatest();
