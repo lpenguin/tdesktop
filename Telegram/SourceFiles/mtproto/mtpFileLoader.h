@@ -27,7 +27,7 @@ class mtpFileLoader : public QObject, public RPCSender {
 
 public:
 
-	mtpFileLoader(int32 dc, const int64 &volume, int32 local, const int64 &secret);
+	mtpFileLoader(int32 dc, const int64 &volume, int32 local, const int64 &secret, int32 size = 0);
 	mtpFileLoader(int32 dc, const uint64 &id, const uint64 &access, mtpTypeId locType, const QString &to, int32 size);
 	mtpFileLoader(int32 dc, const uint64 &id, const uint64 &access, mtpTypeId locType, const QString &to, int32 size, bool todata);
 	bool done() const;
@@ -35,7 +35,7 @@ public:
 	const QByteArray &bytes() const;
 	QString fileName() const;
 	float64 currentProgress() const;
-	int32 currentOffset() const;
+	int32 currentOffset(bool includeSkipped = false) const;
 	int32 fullSize() const;
 
 	void setFileName(const QString &filename); // set filename for duplicateInData loader
@@ -61,14 +61,22 @@ private:
 
 	mtpFileLoaderQueue *queue;
 	bool inQueue, complete;
-	int32 requestId;
+	
+	void cancelRequests();
+
+	typedef QMap<mtpRequestId, int32> Requests;
+	Requests requests;
+	int32 skippedBytes;
+	int32 nextRequestOffset;
+	bool lastComplete;
+
 	void started(bool loadFirst, bool prior);
 	void removeFromQueue();
 
 	void loadNext();
 	void finishFail();
 	bool loadPart();
-	void partLoaded(int32 offset, const MTPupload_File &result);
+	void partLoaded(int32 offset, const MTPupload_File &result, mtpRequestId req);
 	bool partFailed(const RPCError &error);
 
 	int32 dc;
@@ -81,8 +89,9 @@ private:
 	uint64 id; // for other locations
 	uint64 access;
 	QFile file;
+	QString fname;
+	bool fileIsOpen;
 	bool duplicateInData;
-	int32 initialSize;
 
 	QByteArray data;
 

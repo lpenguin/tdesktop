@@ -31,11 +31,13 @@ namespace _mtp_internal {
 	static const uint32 dcShift = 10000;
 
 	mtpRequestId storeRequest(mtpRequest &request, const RPCResponseHandler &parser);
-	void replaceRequest(mtpRequest &newRequest, const mtpRequest &oldRequest);
+	mtpRequest getRequest(mtpRequestId req);
+	void wrapInvokeAfter(mtpRequest &to, const mtpRequest &from, const mtpRequestMap &haveSent);
 	void clearCallbacks(mtpRequestId requestId, int32 errorCode = RPCError::NoError); // 0 - do not toggle onError callback
 	void clearCallbacksDelayed(const RPCCallbackClears &requestIds);
 	void performDelayedClear();
 	void execCallback(mtpRequestId requestId, const mtpPrime *from, const mtpPrime *end);
+	bool hasCallbacks(mtpRequestId requestId);
 	void globalCallback(const mtpPrime *from, const mtpPrime *end);
 	void onStateChange(int32 dc, int32 state);
 	void onSessionReset(int32 dc);
@@ -47,9 +49,17 @@ namespace _mtp_internal {
 	class RequestResender : public QObject {
 		Q_OBJECT
 
+	public:
+
+		RequestResender();
+
 	public slots:
 
 		void checkDelayed();
+
+	private:
+
+		SingleTimer _timer;
 	};
 };
 
@@ -58,9 +68,19 @@ namespace MTP {
 	mtpAuthKey &localKey();
 	void createLocalKey(const QByteArray &pass, QByteArray *salt = 0);
 
-	static const uint32 dld = 1 * _mtp_internal::dcShift; // send(req, callbacks, MTP::dld + dc) - for download
-	static const uint32 upl = 2 * _mtp_internal::dcShift; // send(req, callbacks, MTP::upl + dc) - for upload
-	static const uint32 cfg = 3 * _mtp_internal::dcShift; // send(MTPhelp_GetConfig(), MTP::cfg + dc) - for dc enum
+	static const uint32 cfg = 1 * _mtp_internal::dcShift; // send(MTPhelp_GetConfig(), MTP::cfg + dc) - for dc enum
+	static const uint32 dld[MTPDownloadSessionsCount] = { // send(req, callbacks, MTP::dld[i] + dc) - for download
+		0x10 * _mtp_internal::dcShift,
+		0x11 * _mtp_internal::dcShift,
+		0x12 * _mtp_internal::dcShift,
+		0x13 * _mtp_internal::dcShift,
+	};
+	static const uint32 upl[MTPUploadSessionsCount] = { // send(req, callbacks, MTP::upl[i] + dc) - for upload
+		0x20 * _mtp_internal::dcShift,
+		0x21 * _mtp_internal::dcShift,
+		0x22 * _mtp_internal::dcShift,
+		0x23 * _mtp_internal::dcShift,
+	};
 
 	void start();
 	void restart();
@@ -74,12 +94,15 @@ namespace MTP {
 	QString dctransport(int32 dc = 0);
 	void initdc(int32 dc);
 	template <typename TRequest>
-	inline mtpRequestId send(const TRequest &request, RPCResponseHandler callbacks = RPCResponseHandler(), int32 dc = 0, uint64 msCanWait = 0) {
-		return _mtp_internal::getSession(dc)->send(request, callbacks, msCanWait, _mtp_internal::getLayer(), !dc);
+	inline mtpRequestId send(const TRequest &request, RPCResponseHandler callbacks = RPCResponseHandler(), int32 dc = 0, uint64 msCanWait = 0, mtpRequestId after = 0) {
+		MTProtoSessionPtr session = _mtp_internal::getSession(dc);
+		if (!session) return 0;
+		
+		return session->send(request, callbacks, msCanWait, _mtp_internal::getLayer(), !dc, after);
 	}
 	template <typename TRequest>
-	inline mtpRequestId send(const TRequest &request, RPCDoneHandlerPtr onDone, RPCFailHandlerPtr onFail = RPCFailHandlerPtr(), int32 dc = 0, uint64 msCanWait = 0) {
-		return send(request, RPCResponseHandler(onDone, onFail), dc, msCanWait);
+	inline mtpRequestId send(const TRequest &request, RPCDoneHandlerPtr onDone, RPCFailHandlerPtr onFail = RPCFailHandlerPtr(), int32 dc = 0, uint64 msCanWait = 0, mtpRequestId after = 0) {
+		return send(request, RPCResponseHandler(onDone, onFail), dc, msCanWait, after);
 	}
 	void cancel(mtpRequestId req);
 	void killSession(int32 dc);

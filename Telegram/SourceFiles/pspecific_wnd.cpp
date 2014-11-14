@@ -1,4 +1,3 @@
-
 /*
 This file is part of Telegram Desktop,
 an unofficial desktop messaging app, see https://telegram.org
@@ -230,7 +229,7 @@ namespace {
 					destroy();
 					return false;
 				}
-		
+
 				hwnds[i] = CreateWindowEx(WS_EX_LAYERED | WS_EX_TOOLWINDOW, _cn, 0, WS_POPUP, 0, 0, 0, 0, 0, 0, appinst, 0);
 				if (!hwnds[i]) {
 					DEBUG_LOG(("Application Error: could not create shadow window class %1, error: %2").arg(i).arg(GetLastError()));
@@ -861,7 +860,7 @@ namespace {
 
 };
 
-PsMainWindow::PsMainWindow(QWidget *parent) : QMainWindow(parent), ps_hWnd(0), ps_menu(0), icon256(qsl(":/gui/art/iconround256.png")),
+PsMainWindow::PsMainWindow(QWidget *parent) : QMainWindow(parent), ps_hWnd(0), ps_menu(0), icon256(qsl(":/gui/art/iconround256.png")), wndIcon(QPixmap::fromImage(icon256)),
 	ps_iconBig(0), ps_iconSmall(0), ps_iconOverlay(0), trayIcon(0), trayIconMenu(0), posInited(false), ps_tbHider_hWnd(createTaskbarHider()), psIdle(false) {
 	tbCreatedMsgId = RegisterWindowMessage(L"TaskbarButtonCreated");
 	connect(&psIdleTimer, SIGNAL(timeout()), this, SLOT(psIdleTimeout()));

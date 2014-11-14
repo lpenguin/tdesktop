@@ -337,7 +337,7 @@ NotifyWindow::~NotifyWindow() {
 
 Window::Window(QWidget *parent) : PsMainWindow(parent),
 intro(0), main(0), settings(0), layerBG(0), _topWidget(0),
-_connecting(0), _tempDeleter(0), _tempDeleterThread(0), myIcon(QPixmap::fromImage(icon256)), dragging(false), _inactivePress(false), _mediaView(0) {
+_connecting(0), _tempDeleter(0), _tempDeleterThread(0), dragging(false), _inactivePress(false), _mediaView(0) {
 
 	icon16 = icon256.scaledToWidth(16, Qt::SmoothTransformation);
 	icon32 = icon256.scaledToWidth(32, Qt::SmoothTransformation);
@@ -359,7 +359,6 @@ _connecting(0), _tempDeleter(0), _tempDeleterThread(0), myIcon(QPixmap::fromImag
 	connect(&_inactiveTimer, SIGNAL(timeout()), this, SLOT(onInactiveTimer()));
 
 	connect(&notifyWaitTimer, SIGNAL(timeout()), this, SLOT(notifyFire()));
-	notifyWaitTimer.setSingleShot(true);
 }
 
 void Window::inactivePress(bool inactive) {
@@ -381,7 +380,7 @@ void Window::onInactiveTimer() {
 
 void Window::init() {
 	psInitFrameless();
-	setWindowIcon(myIcon);
+	setWindowIcon(wndIcon);
 
 	App::app()->installEventFilter(this);
     connect(windowHandle(), SIGNAL(activeChanged()), this, SLOT(checkHistoryActivation()));
@@ -469,7 +468,7 @@ void Window::setupMain(bool anim) {
 	if (anim) {
 		main->animShow(bg);
 	} else {
-		MTP::send(MTPusers_GetUsers(MTP_vector<MTPInputUser>(QVector<MTPInputUser>(1, MTP_inputUserSelf()))), main->rpcDone(&MainWidget::startFull));
+		MTP::send(MTPusers_GetUsers(MTP_vector<MTPInputUser>(1, MTP_inputUserSelf())), main->rpcDone(&MainWidget::startFull));
 		main->activate();
 	}
 
@@ -876,7 +875,6 @@ void Window::noTopWidget(QWidget *w) {
 void Window::showFromTray(QSystemTrayIcon::ActivationReason reason) {
 	if (reason != QSystemTrayIcon::Context) {
         activate();
-		setWindowIcon(myIcon);
 		psUpdateCounter();
 		if (App::main()) App::main()->setOnline(windowState());
 		QTimer::singleShot(1, this, SLOT(updateTrayMenu()));
@@ -967,7 +965,7 @@ void Window::notifySchedule(History *history, MsgId msgId) {
 		App::wnd()->getNotifySetting(MTP_inputNotifyPeer(history->peer->input));
 	}
 
-	uint64 ms = getms() + NotifyWaitTimeout;
+	uint64 ms = getms(true) + NotifyWaitTimeout;
 	notifyWhenAlerts[history].insert(ms, NullType());
 	if (cDesktopNotify()) {
 		NotifyWhenMaps::iterator i = notifyWhenMaps.find(history);
@@ -1059,7 +1057,7 @@ void Window::notifyShowNext(NotifyWindow *remove) {
 		}
 	}
 
-	uint64 ms = getms(), nextAlert = 0;
+	uint64 ms = getms(true), nextAlert = 0;
 	bool alert = false;
 	for (NotifyWhenAlerts::iterator i = notifyWhenAlerts.begin(); i != notifyWhenAlerts.end();) {
 		while (!i.value().isEmpty() && i.value().begin().key() <= ms) {
@@ -1153,7 +1151,7 @@ void Window::notifyShowNext(NotifyWindow *remove) {
                 }
 
 
-				uint64 ms = getms();
+				uint64 ms = getms(true);
 				History *history = notifyItem->history();
 				history->skipNotification();
 				NotifyWhenMaps::iterator j = notifyWhenMaps.find(history);

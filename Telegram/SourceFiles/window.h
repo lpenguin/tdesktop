@@ -281,8 +281,6 @@ private:
 
 	void clearWidgets();
 
-	QIcon myIcon;
-
 	bool dragging;
 	QPoint dragStart;
 
@@ -301,7 +299,7 @@ private:
 	typedef QMap<History*, NotifyWaiter> NotifyWaiters;
 	NotifyWaiters notifyWaiters;
 	NotifyWaiters notifySettingWaiters;
-	QTimer notifyWaitTimer;
+	SingleTimer notifyWaitTimer;
 
 	typedef QMap<uint64, NullType> NotifyWhenAlert;
 	typedef QMap<History*, NotifyWhenAlert> NotifyWhenAlerts;

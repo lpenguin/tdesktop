@@ -139,8 +139,6 @@ Application::Application(int &argc, char **argv) : PsApplication(argc, argv),
 
     psInstallEventFilter();
 
-	updateCheckTimer.setSingleShot(true);
-
 	connect(&socket, SIGNAL(connected()), this, SLOT(socketConnected()));
 	connect(&socket, SIGNAL(disconnected()), this, SLOT(socketDisconnected()));
 	connect(&socket, SIGNAL(error(QLocalSocket::LocalSocketError)), this, SLOT(socketError(QLocalSocket::LocalSocketError)));
@@ -151,8 +149,11 @@ Application::Application(int &argc, char **argv) : PsApplication(argc, argv),
 	connect(&updateCheckTimer, SIGNAL(timeout()), this, SLOT(startUpdateCheck()));
 	connect(this, SIGNAL(updateFailed()), this, SLOT(onUpdateFailed()));
 	connect(this, SIGNAL(updateReady()), this, SLOT(onUpdateReady()));
+	connect(this, SIGNAL(applicationStateChanged(Qt::ApplicationState)), this, SLOT(onAppStateChanged(Qt::ApplicationState)));
 	connect(&writeUserConfigTimer, SIGNAL(timeout()), this, SLOT(onWriteUserConfig()));
 	writeUserConfigTimer.setSingleShot(true);
+
+	connect(&killDownloadSessionsTimer, SIGNAL(timeout()), this, SLOT(killDownloadSessions()));
 
     if (cManyInstance()) {
 		startApp();
@@ -326,8 +327,52 @@ void Application::writeUserConfigIn(uint64 ms) {
 	}
 }
 
+void Application::killDownloadSessionsStart(int32 dc) {
+	if (killDownloadSessionTimes.constFind(dc) == killDownloadSessionTimes.cend()) {
+		killDownloadSessionTimes.insert(dc, getms() + MTPAckSendWaiting + MTPKillFileSessionTimeout);
+	}
+	if (!killDownloadSessionsTimer.isActive()) {
+		killDownloadSessionsTimer.start(MTPAckSendWaiting + MTPKillFileSessionTimeout + 5);
+	}
+}
+
+void Application::killDownloadSessionsStop(int32 dc) {
+	killDownloadSessionTimes.remove(dc);
+	if (killDownloadSessionTimes.isEmpty() && killDownloadSessionsTimer.isActive()) {
+		killDownloadSessionsTimer.stop();
+	}
+}
+
+void Application::checkLocalTime() {
+	if (App::main()) App::main()->checkLastUpdate(checkms());
+}
+
 void Application::onWriteUserConfig() {
 	App::writeUserConfig();
+}
+
+void Application::onAppStateChanged(Qt::ApplicationState state) {
+	checkLocalTime();
+}
+
+void Application::killDownloadSessions() {
+	uint64 ms = getms(), left = MTPAckSendWaiting + MTPKillFileSessionTimeout;
+	for (QMap<int32, uint64>::iterator i = killDownloadSessionTimes.begin(); i != killDownloadSessionTimes.end(); ) {
+		if (i.value() <= ms) {
+			for (int j = 1; j < MTPDownloadSessionsCount; ++j) {
+				MTP::killSession(MTP::dld[j] + i.key());
+			}
+			i = killDownloadSessionTimes.erase(i);
+		} else {
+			if (i.value() - ms < left) {
+				left = i.value() - ms;
+			}
+			++i;
+		}
+	}
+	if (!killDownloadSessionTimes.isEmpty()) {
+		killDownloadSessionsTimer.start(left);
+	}
 }
 
 void Application::photoUpdated(MsgId msgId, const MTPInputFile &file) {
@@ -339,7 +384,8 @@ void Application::photoUpdated(MsgId msgId, const MTPInputFile &file) {
 		if (peer == App::self()->id) {
 			MTP::send(MTPphotos_UploadProfilePhoto(file, MTP_string(""), MTP_inputGeoPointEmpty(), MTP_inputPhotoCrop(MTP_double(0), MTP_double(0), MTP_double(100))), rpcDone(&Application::selfPhotoDone), rpcFail(&Application::peerPhotoFail, peer));
 		} else {
-			MTP::send(MTPmessages_EditChatPhoto(MTP_int(peer & 0xFFFFFFFF), MTP_inputChatUploadedPhoto(file, MTP_inputPhotoCrop(MTP_double(0), MTP_double(0), MTP_double(100)))), rpcDone(&Application::chatPhotoDone, peer), rpcFail(&Application::peerPhotoFail, peer));
+			History *hist = App::history(peer);
+			hist->sendRequestId = MTP::send(MTPmessages_EditChatPhoto(MTP_int(peer & 0xFFFFFFFF), MTP_inputChatUploadedPhoto(file, MTP_inputPhotoCrop(MTP_double(0), MTP_double(0), MTP_double(100)))), rpcDone(&Application::chatPhotoDone, peer), rpcFail(&Application::peerPhotoFail, peer), 0, 0, hist->sendRequestId);
 		}
 	}
 }
@@ -593,6 +639,7 @@ void Application::startApp() {
 	MTP::setStateChangedHandler(mtpStateChanged);
 	MTP::setSessionResetHandler(mtpSessionReset);
 
+	initImageLinkManager();
 	App::initMedia();
 
 	if (MTP::authedId()) {
@@ -706,6 +753,7 @@ Application::~Application() {
 	socket.close();
 	closeApplication();
 	App::deinitMedia();
+	deinitImageLinkManager();
 	mainApp = 0;
 	delete updateReply;
 	delete ::uploader;

@@ -50,7 +50,7 @@ namespace {
 };
 
 PsMainWindow::PsMainWindow(QWidget *parent) : QMainWindow(parent),
-posInited(false), trayIcon(0), trayIconMenu(0), icon256(qsl(":/gui/art/iconround256.png")) {
+posInited(false), trayIcon(0), trayIconMenu(0), icon256(qsl(":/gui/art/iconround256.png")), wndIcon(QPixmap::fromImage(icon256)) {
     connect(&psIdleTimer, SIGNAL(timeout()), this, SLOT(psIdleTimeout()));
     psIdleTimer.setSingleShot(false);
     launcher = UnityLauncher::create("telegram.desktop");
@@ -116,6 +116,8 @@ void PsMainWindow::psUpdateWorkmode() {
 }
 
 void PsMainWindow::psUpdateCounter() {
+    setWindowIcon(wndIcon);
+
 	int32 counter = App::histories().unreadFull;
 
     setWindowTitle((counter > 0) ? qsl("Telegram (%1)").arg(counter) : qsl("Telegram"));

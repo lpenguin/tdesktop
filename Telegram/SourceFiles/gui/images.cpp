@@ -88,9 +88,61 @@ const QPixmap &Image::pixBlurred(int32 w, int32 h) const {
 		w *= cIntRetinaFactor();
 		h *= cIntRetinaFactor();
 	}
-	uint64 k = 0x8000000000000000L | (uint64(w) << 32) | uint64(h);
+	uint64 k = 0x8000000000000000LL | (uint64(w) << 32) | uint64(h);
 	Sizes::const_iterator i = _sizesCache.constFind(k);
 	if (i == _sizesCache.cend()) {
+		QPixmap p(pixBlurredNoCache(w, h));
+		if (cRetina()) p.setDevicePixelRatio(cRetinaFactor());
+		i = _sizesCache.insert(k, p);
+		if (!p.isNull()) {
+			globalAquiredSize += int64(p.width()) * p.height() * 4;
+		}
+	}
+	return i.value();
+}
+
+const QPixmap &Image::pixSingle(int32 w, int32 h) const {
+	restore();
+	checkload();
+
+	if (w <= 0 || !width() || !height()) {
+		w = width() * cIntRetinaFactor();
+	} else if (cRetina()) {
+		w *= cIntRetinaFactor();
+		h *= cIntRetinaFactor();
+	}
+	uint64 k = 0LL;
+	Sizes::const_iterator i = _sizesCache.constFind(k);
+	if (i == _sizesCache.cend() || i->width() != w || (h && i->height() != h)) {
+		if (i != _sizesCache.cend()) {
+			globalAquiredSize -= int64(i->width()) * i->height() * 4;
+		}
+		QPixmap p(pixNoCache(w, h, true));
+		if (cRetina()) p.setDevicePixelRatio(cRetinaFactor());
+		i = _sizesCache.insert(k, p);
+		if (!p.isNull()) {
+			globalAquiredSize += int64(p.width()) * p.height() * 4;
+		}
+	}
+	return i.value();
+}
+
+const QPixmap &Image::pixBlurredSingle(int32 w, int32 h) const {
+	restore();
+	checkload();
+
+	if (w <= 0 || !width() || !height()) {
+		w = width() * cIntRetinaFactor();
+	} else if (cRetina()) {
+		w *= cIntRetinaFactor();
+		h *= cIntRetinaFactor();
+	}
+	uint64 k = 0x8000000000000000LL | 0LL;
+	Sizes::const_iterator i = _sizesCache.constFind(k);
+	if (i == _sizesCache.cend() || i->width() != w || (h && i->height() != h)) {
+		if (i != _sizesCache.cend()) {
+			globalAquiredSize -= int64(i->width()) * i->height() * 4;
+		}
 		QPixmap p(pixBlurredNoCache(w, h));
 		if (cRetina()) p.setDevicePixelRatio(cRetinaFactor());
 		i = _sizesCache.insert(k, p);
@@ -336,7 +388,7 @@ int64 imageCacheSize() {
 	return globalAquiredSize;
 }
 
-StorageImage::StorageImage(int32 width, int32 height, int32 dc, const int64 &volume, int32 local, const int64 &secret) : w(width), h(height), loader(new mtpFileLoader(dc, volume, local, secret)) {
+StorageImage::StorageImage(int32 width, int32 height, int32 dc, const int64 &volume, int32 local, const int64 &secret, int32 size) : w(width), h(height), loader(new mtpFileLoader(dc, volume, local, secret, size)) {
 }
 
 StorageImage::StorageImage(int32 width, int32 height, int32 dc, const int64 &volume, int32 local, const int64 &secret, QByteArray &bytes) : w(width), h(height), loader(0) {
@@ -427,11 +479,11 @@ bool StorageImage::loaded() const {
 	return check();
 }
 
-StorageImage *getImage(int32 width, int32 height, int32 dc, const int64 &volume, int32 local, const int64 &secret) {
+StorageImage *getImage(int32 width, int32 height, int32 dc, const int64 &volume, int32 local, const int64 &secret, int32 size) {
 	QByteArray key(storageKey(dc, volume, local, secret));
 	StorageImages::const_iterator i = storageImages.constFind(key);
 	if (i == storageImages.cend()) {
-		i = storageImages.insert(key, new StorageImage(width, height, dc, volume, local, secret));
+		i = storageImages.insert(key, new StorageImage(width, height, dc, volume, local, secret, size));
 	}
 	return i.value();
 }

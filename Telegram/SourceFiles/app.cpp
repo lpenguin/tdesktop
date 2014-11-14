@@ -43,6 +43,9 @@ namespace {
 	typedef QHash<AudioId, AudioData*> AudiosData;
 	AudiosData audiosData;
 
+	typedef QHash<QString, ImageLinkData*> ImageLinksData;
+	ImageLinksData imageLinksData;
+
 	typedef QHash<DocumentId, DocumentData*> DocumentsData;
 	DocumentsData documentsData;
 
@@ -531,7 +534,7 @@ namespace App {
 			const MTPDphotoSize &d(size.c_photoSize());
 			if (d.vlocation.type() == mtpc_fileLocation) {
 				const MTPDfileLocation &l(d.vlocation.c_fileLocation());
-				return ImagePtr(d.vw.v, d.vh.v, l.vdc_id.v, l.vvolume_id.v, l.vlocal_id.v, l.vsecret.v);
+				return ImagePtr(d.vw.v, d.vh.v, l.vdc_id.v, l.vvolume_id.v, l.vlocal_id.v, l.vsecret.v, d.vsize.v);
 			}
 		} break;
 		case mtpc_photoCachedSize: {
@@ -561,12 +564,19 @@ namespace App {
 	}
 	
 	void feedWereDeleted(const QVector<MTPint> &msgsIds) {
+		bool resized = false;
 		for (QVector<MTPint>::const_iterator i = msgsIds.cbegin(), e = msgsIds.cend(); i != e; ++i) {
 			MsgsData::const_iterator j = msgsData.constFind(i->v);
 			if (j != msgsData.cend()) {
 				History *h = (*j)->history();
 				(*j)->destroy();
+				if (App::main() && h->peer == App::main()->peer()) {
+					resized = true;
+				}
 			}
+		}
+		if (resized) {
+			App::main()->itemResized(0);
 		}
 	}
 
@@ -574,7 +584,7 @@ namespace App {
 		const QVector<MTPcontacts_Link> &v(links.c_vector().v);
 		for (QVector<MTPcontacts_Link>::const_iterator i = v.cbegin(), e = v.cend(); i != e; ++i) {
 			const MTPDcontacts_link &dv(i->c_contacts_link());
-			feedUsers(MTP_vector<MTPUser>(QVector<MTPUser>(1, dv.vuser)));
+			feedUsers(MTP_vector<MTPUser>(1, dv.vuser));
 			MTPint userId(MTP_int(0));
 			switch (dv.vuser.type()) {
 			case mtpc_userEmpty: userId = dv.vuser.c_userEmpty().vid; break;
@@ -911,14 +921,6 @@ namespace App {
 		return result;
 	}
 
-	void forgetPhotos() {
-		lastPhotos.clear();
-		lastPhotosMap.clear();
-		for (PhotosData::const_iterator i = photosData.cbegin(), e = photosData.cend(); i != e; ++i) {
-			i.value()->forget();
-		}
-	}
-	
 	VideoData *video(const VideoId &video, VideoData *convert, const uint64 &access, int32 user, int32 date, int32 duration, int32 w, int32 h, const ImagePtr &thumb, int32 dc, int32 size) {
 		if (convert) {
 			if (convert->id != video) {
@@ -967,12 +969,6 @@ namespace App {
 		return result;
 	}
 
-	void forgetVideos() {
-		for (VideosData::const_iterator i = videosData.cbegin(), e = videosData.cend(); i != e; ++i) {
-			i.value()->forget();
-		}
-	}
-
 	AudioData *audio(const AudioId &audio, AudioData *convert, const uint64 &access, int32 user, int32 date, int32 duration, int32 dc, int32 size) {
 		if (convert) {
 			if (convert->id != audio) {
@@ -1013,12 +1009,6 @@ namespace App {
 			}
 		}
 		return result;
-	}
-
-	void forgetAudios() {
-		for (AudiosData::const_iterator i = audiosData.cbegin(), e = audiosData.cend(); i != e; ++i) {
-			i.value()->forget();
-		}
 	}
 
 	DocumentData *document(const DocumentId &document, DocumentData *convert, const uint64 &access, int32 user, int32 date, const QString &name, const QString &mime, const ImagePtr &thumb, int32 dc, int32 size) {
@@ -1067,9 +1057,37 @@ namespace App {
 		return result;
 	}
 
-	void forgetDocuments() {
+	ImageLinkData *imageLink(const QString &imageLink, ImageLinkType type, const QString &url) {
+		ImageLinksData::const_iterator i = imageLinksData.constFind(imageLink);
+		ImageLinkData *result;
+		if (i == imageLinksData.cend()) {
+			result = new ImageLinkData(imageLink);
+			imageLinksData.insert(imageLink, result);
+			result->type = type;
+			result->openl = TextLinkPtr(new TextLink(url));
+		} else {
+			result = i.value();
+		}
+		return result;
+	}
+
+	void forgetMedia() {
+		lastPhotos.clear();
+		lastPhotosMap.clear();
+		for (PhotosData::const_iterator i = photosData.cbegin(), e = photosData.cend(); i != e; ++i) {
+			i.value()->forget();
+		}
+		for (VideosData::const_iterator i = videosData.cbegin(), e = videosData.cend(); i != e; ++i) {
+			i.value()->forget();
+		}
+		for (AudiosData::const_iterator i = audiosData.cbegin(), e = audiosData.cend(); i != e; ++i) {
+			i.value()->forget();
+		}
 		for (DocumentsData::const_iterator i = documentsData.cbegin(), e = documentsData.cend(); i != e; ++i) {
 			i.value()->forget();
+		}
+		for (ImageLinksData::const_iterator i = imageLinksData.cbegin(), e = imageLinksData.cend(); i != e; ++i) {
+			i.value()->thumb->forget();
 		}
 	}
 
@@ -1854,10 +1872,7 @@ namespace App {
 	void checkImageCacheSize() {
 		int64 nowImageCacheSize = imageCacheSize();
 		if (nowImageCacheSize > serviceImageCacheSize + MemoryForImageCache) {
-			App::forgetPhotos();
-			App::forgetVideos();
-			App::forgetAudios();
-			App::forgetDocuments();
+			App::forgetMedia();
 			serviceImageCacheSize = imageCacheSize();
 		}
 	}

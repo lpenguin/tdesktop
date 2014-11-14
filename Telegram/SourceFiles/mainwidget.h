@@ -197,7 +197,7 @@ public:
 	void historyToDown(History *hist);
 	void dialogsToUp();
 	void newUnreadMsg(History *history, MsgId msgId);
-	void updUpdated(int32 pts, int32 date, int32 qts, int32 seq);
+	void updUpdated(int32 pts, int32 seq);
 	void historyWasRead();
 
 	void peerBefore(const PeerData *inPeer, MsgId inMsg, PeerData *&outPeer, MsgId &outMsg);
@@ -266,6 +266,7 @@ public:
 	DialogsIndexed &contactsList();
     
     void sendMessage(History *history, const QString &text);
+	void sendPreparedText(History *hist, const QString &text);
     
     void readServerHistory(History *history, bool force = true);
 
@@ -282,6 +283,8 @@ public:
 
 	void loadMediaBack(PeerData *peer, MediaOverviewType type, bool many = false);
 	void peerUsernameChanged(PeerData *peer);
+
+	void checkLastUpdate(bool afterSleep);
 
 	~MainWidget();
 
@@ -312,6 +315,7 @@ public slots:
 
 	void onParentResize(const QSize &newSize);
 	void getDifference();
+	void getDifferenceForce();
 
 	void setOnline(int windowState = -1);
 	void mainStateChanged(Qt::WindowState state);
@@ -348,6 +352,7 @@ private:
 	void feedUpdate(const MTPUpdate &update);
 
 	void updateReceived(const mtpPrime *from, const mtpPrime *end);
+	void handleUpdates(const MTPUpdates &updates);
 	bool updateFail(const RPCError &e);
 
 	void hideAll();
@@ -377,18 +382,30 @@ private:
 
 	int updPts, updDate, updQts, updSeq;
 	bool updInited;
-	QTimer noUpdatesTimer;
+	SingleTimer noUpdatesTimer;
 
 	mtpRequestId onlineRequest;
-	QTimer onlineTimer;
-	QTimer onlineUpdater;
+	SingleTimer onlineTimer;
+	SingleTimer onlineUpdater;
 
 	QSet<PeerData*> updateNotifySettingPeers;
-	QTimer updateNotifySettingTimer;
+	SingleTimer updateNotifySettingTimer;
     
     typedef QMap<PeerData*, mtpRequestId> ReadRequests;
     ReadRequests _readRequests;
 
 	typedef QMap<PeerData*, mtpRequestId> OverviewsPreload;
 	OverviewsPreload _overviewPreload[OverviewCount], _overviewLoad[OverviewCount];
+
+	QMap<int32, MTPUpdates> _bySeqUpdates;
+	QMap<int32, MTPmessages_SentMessage> _bySeqSentMessage;
+	QMap<int32, MTPmessages_StatedMessage> _bySeqStatedMessage;
+	QMap<int32, MTPmessages_StatedMessages> _bySeqStatedMessages;
+	QMap<int32, int32> _bySeqPart;
+	SingleTimer _bySeqTimer;
+
+	int32 _failDifferenceTimeout; // growing timeout for getDifference calls, if it fails
+	SingleTimer _failDifferenceTimer;
+
+	uint64 _lastUpdateTime;
 };

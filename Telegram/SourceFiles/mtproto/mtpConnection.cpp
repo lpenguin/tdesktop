@@ -309,6 +309,7 @@ void MTProtoConnection::restart() {
 }
 
 void MTProtoConnection::stop() {
+	data->stop();
 	thread->quit();
 }
 
@@ -679,6 +680,15 @@ void MTPautoConnection::tcpSend(mtpBuffer &buffer) {
 	TCP_LOG(("TCP Info: write %1 packet %2 bytes").arg(packetNum).arg(len));
 
 	sock.write((const char*)&buffer[0], len);
+	//int64 b = sock.bytesToWrite();
+	//if (b > 100000) {
+	//	int a = 0;
+	//}
+	//sock.flush();
+	//int64 b2 = sock.bytesToWrite();
+	//if (b2 > 0) {
+	//	TCP_LOG(("TCP Info: writing many, %1 left to write").arg(b2));
+	//}
 }
 
 void MTPautoConnection::httpSend(mtpBuffer &buffer) {
@@ -1042,7 +1052,6 @@ MTProtoConnectionPrivate::MTProtoConnectionPrivate(QThread *thread, MTProtoConne
     , oldConnection(true)
     , receiveDelay(MinReceiveDelay)
     , firstSentAt(-1)
-	, ackRequest(MTP_msgs_ack(MTPVector<MTPlong>()))
     , pingId(0)
     , toSendPingId(0)
     , pingMsgId(0)
@@ -1050,9 +1059,8 @@ MTProtoConnectionPrivate::MTProtoConnectionPrivate(QThread *thread, MTProtoConne
     , keyId(0)
     , sessionData(data)
     , myKeyLock(false)
-	, authKeyData(0) {
-
-	ackRequestData = &ackRequest._msgs_ack().vmsg_ids._vector().v;
+	, authKeyData(0)
+	, authKeyStrings(0) {
 
 	oldConnectionTimer.moveToThread(thread);
 	connCheckTimer.moveToThread(thread);
@@ -1087,10 +1095,6 @@ MTProtoConnectionPrivate::MTProtoConnectionPrivate(QThread *thread, MTProtoConne
 	connect(this, SIGNAL(stateChanged(qint32)), sessionData->owner(), SLOT(onConnectionStateChange(qint32)));
 	connect(sessionData->owner(), SIGNAL(needToSend()), this, SLOT(tryToSend()));
 	connect(this, SIGNAL(sessionResetDone()), sessionData->owner(), SLOT(onResetDone()));
-
-	oldConnectionTimer.setSingleShot(true);
-	connCheckTimer.setSingleShot(true);
-	retryTimer.setSingleShot(true);
 }
 
 void MTProtoConnectionPrivate::onConfigLoaded() {
@@ -1106,7 +1110,7 @@ int32 MTProtoConnectionPrivate::getState() const {
 	int32 result = _state;
 	if (_state < 0) {
 		if (retryTimer.isActive()) {
-			result = int32(getms() - retryWillFinish);
+			result = int32(getms(true) - retryWillFinish);
 			if (result >= 0) {
 				result = -1;
 			}
@@ -1133,7 +1137,7 @@ bool MTProtoConnectionPrivate::setState(int32 state, int32 ifState) {
 	if (state < 0) {
 		retryTimeout = -state;
 		retryTimer.start(retryTimeout);
-		retryWillFinish = getms() + retryTimeout;
+		retryWillFinish = getms(true) + retryTimeout;
 	}
 	emit stateChanged(state);
 	return true;
@@ -1249,6 +1253,13 @@ void MTProtoConnectionPrivate::resetSession() { // recreate all msg_id and msg_s
 		}
 	}
 
+	ackRequestData.clear();
+	resendRequestData.clear();
+	{
+		QWriteLocker locker5(sessionData->stateRequestMutex());
+		sessionData->stateRequestMap().clear();
+	}
+
 	emit sessionResetDone();
 }
 
@@ -1332,31 +1343,39 @@ mtpMsgId MTProtoConnectionPrivate::replaceMsgId(mtpRequest &request, mtpMsgId ne
 	return newId;
 }
 
+mtpMsgId MTProtoConnectionPrivate::placeToContainer(mtpRequest &toSendRequest, mtpMsgId &bigMsgId, mtpMsgId *&haveSentArr, mtpRequest &req) {
+	mtpMsgId msgId = prepareToSend(req, bigMsgId);
+	if (msgId > bigMsgId) msgId = replaceMsgId(req, bigMsgId);
+	if (msgId >= bigMsgId) bigMsgId = msgid();
+	*(haveSentArr++) = msgId;
+
+	uint32 from = toSendRequest->size(), len = mtpRequestData::messageSize(req);
+	toSendRequest->resize(from + len);
+	memcpy(toSendRequest->data() + from, req->constData() + 4, len * sizeof(mtpPrime));
+
+	return msgId;
+}
+
 void MTProtoConnectionPrivate::tryToSend() {
-	if (!conn) return;
+	QReadLocker lockFinished(&sessionDataMutex);
+	if (!sessionData || !conn) {
+		return;
+	}
 
-	bool prependOnly = false, havePrepend = false;
-	mtpRequest prepend;
+	bool prependOnly = false;
+	mtpRequest pingRequest;
 	if (toSendPingId) {
-/*
-		MTPPing_delay_disconnect ping;
-		ping.ping_id = MTP_long(toSendPingId);
-		ping.disconnect_delay.v = 45;
-
-		DEBUG_LOG(("MTP Info: sending ping_delay_disconnect, delay: %1s, ping_id: %2").arg(ping.disconnect_delay.v).arg(ping.ping_id.v));
-/**/
 		MTPPing ping(MTPping(MTP_long(toSendPingId)));
 
 		prependOnly = (getState() != MTProtoConnection::Connected);
 		DEBUG_LOG(("MTP Info: sending ping, ping_id: %1, prepend_only: %2").arg(ping.vping_id.v).arg(prependOnly ? "[TRUE]" : "[FALSE]"));
 
 		uint32 pingSize = ping.size() >> 2; // copy from MTProtoSession::send
-		prepend = mtpRequestData::prepare(pingSize);
-		ping.write(*prepend);
+		pingRequest = mtpRequestData::prepare(pingSize);
+		ping.write(*pingRequest);
 
-		prepend->msDate = getms(); // > 0 - can send without container
-		prepend->requestId = 0; // dont add to haveSent / wereAcked maps
-		havePrepend = true;
+		pingRequest->msDate = getms(true); // > 0 - can send without container
+		pingRequest->requestId = 0; // dont add to haveSent / wereAcked maps
 
 		pingId = toSendPingId;
 		toSendPingId = 0;
@@ -1365,6 +1384,53 @@ void MTProtoConnectionPrivate::tryToSend() {
 		DEBUG_LOG(("MTP Info: trying to send after ping, state: %1").arg(st));
 		if (st != MTProtoConnection::Connected) {
 			return; // just do nothing, if is not connected yet
+		}
+	}
+
+	mtpRequest ackRequest, resendRequest, stateRequest;
+	if (!prependOnly && !ackRequestData.isEmpty()) {
+		MTPMsgsAck ack(MTP_msgs_ack(MTP_vector<MTPlong>(ackRequestData)));
+
+		ackRequest = mtpRequestData::prepare(ack.size() >> 2);
+		ack.write(*ackRequest);
+
+		ackRequest->msDate = getms(true); // > 0 - can send without container
+		ackRequest->requestId = 0; // dont add to haveSent / wereAcked maps
+
+		ackRequestData.clear();
+	}
+	if (!prependOnly && !resendRequestData.isEmpty()) {
+		MTPMsgResendReq resend(MTP_msg_resend_req(MTP_vector<MTPlong>(resendRequestData)));
+
+		resendRequest = mtpRequestData::prepare(resend.size() >> 2);
+		resend.write(*resendRequest);
+
+		resendRequest->msDate = getms(true); // > 0 - can send without container
+		resendRequest->requestId = 0; // dont add to haveSent / wereAcked maps
+
+		resendRequestData.clear();
+	}
+	if (!prependOnly) {
+		QVector<MTPlong> stateReq;
+		{
+			QWriteLocker locker(sessionData->stateRequestMutex());
+			mtpMsgIdsSet &ids(sessionData->stateRequestMap());
+			if (!ids.isEmpty()) {
+				stateReq.reserve(ids.size());
+				for (mtpMsgIdsSet::const_iterator i = ids.cbegin(), e = ids.cend(); i != e; ++i) {
+					stateReq.push_back(MTP_long(i.key()));
+				}
+			}
+			ids.clear();
+		}
+		if (!stateReq.isEmpty()) {
+			MTPMsgsStateReq req(MTP_msgs_state_req(MTP_vector<MTPlong>(stateReq)));
+
+			stateRequest = mtpRequestData::prepare(req.size() >> 2);
+			req.write(*stateRequest);
+
+			stateRequest->msDate = getms(true); // > 0 - can send without container
+			stateRequest->requestId = reqid();// add to haveSent / wereAcked maps, but don't add to requestMap
 		}
 	}
 
@@ -1377,11 +1443,14 @@ void MTProtoConnectionPrivate::tryToSend() {
 		if (prependOnly) locker1.unlock();
 
 		uint32 toSendCount = toSend.size();
-		if (havePrepend) ++toSendCount;
+		if (pingRequest) ++toSendCount;
+		if (ackRequest) ++toSendCount;
+		if (resendRequest) ++toSendCount;
+		if (stateRequest) ++toSendCount;
 
 		if (!toSendCount) return; // nothing to send
 
-		mtpRequest first = havePrepend ? prepend : toSend.cbegin().value();
+		mtpRequest first = pingRequest ? pingRequest : (ackRequest ? ackRequest : (resendRequest ? resendRequest : (stateRequest ? stateRequest : toSend.cbegin().value())));
 		if (toSendCount == 1 && first->msDate > 0) { // if can send without container
 			toSendRequest = first;
 			if (!prependOnly) {
@@ -1390,14 +1459,28 @@ void MTProtoConnectionPrivate::tryToSend() {
 			}
 
 			mtpMsgId msgId = prepareToSend(toSendRequest, msgid());
-			if (havePrepend) pingMsgId = msgId;
+			if (pingRequest) {
+				pingMsgId = msgId;
+				needAnyResponse = true;
+			} else if (resendRequest || stateRequest) {
+				needAnyResponse = true;
+			}
 
 			if (toSendRequest->requestId) {
 				if (mtpRequestData::needAck(toSendRequest)) {
-					toSendRequest->msDate = mtpRequestData::isStateRequest(toSendRequest) ? 0 : getms();
+					toSendRequest->msDate = mtpRequestData::isStateRequest(toSendRequest) ? 0 : getms(true);
 
 					QWriteLocker locker2(sessionData->haveSentMutex());
-					sessionData->haveSentMap().insert(msgId, toSendRequest);
+					mtpRequestMap &haveSent(sessionData->haveSentMap());
+					haveSent.insert(msgId, toSendRequest);
+					if (toSendRequest->after) {
+						int32 toSendSize = toSendRequest->at(7) >> 2;
+						mtpRequest wrappedRequest(mtpRequestData::prepare(toSendSize, toSendSize + 3)); // cons + msg_id
+						wrappedRequest->resize(4);
+						memcpy(wrappedRequest->data(), toSendRequest->constData(), 4 * sizeof(mtpPrime));
+						_mtp_internal::wrapInvokeAfter(wrappedRequest, toSendRequest, haveSent);
+						toSendRequest = wrappedRequest;
+					}
 
 					needAnyResponse = true;
 				} else {
@@ -1407,11 +1490,14 @@ void MTProtoConnectionPrivate::tryToSend() {
 			}
 		} else { // send in container
 			uint32 containerSize = 1 + 1, idsWrapSize = (toSendCount << 1); // cons + vector size, idsWrapSize - size of "request-like" wrap for msgId vector
-			if (havePrepend) containerSize += mtpRequestData::messageSize(prepend);
+			if (pingRequest) containerSize += mtpRequestData::messageSize(pingRequest);
+			if (ackRequest) containerSize += mtpRequestData::messageSize(ackRequest);
+			if (resendRequest) containerSize += mtpRequestData::messageSize(resendRequest);
+			if (stateRequest) containerSize += mtpRequestData::messageSize(stateRequest);
 			for (mtpPreRequestMap::iterator i = toSend.begin(), e = toSend.end(); i != e; ++i) {
 				containerSize += mtpRequestData::messageSize(i.value());
 			}
-			toSendRequest = mtpRequestData::prepare(containerSize); // prepare container
+			toSendRequest = mtpRequestData::prepare(containerSize, containerSize + 3 * toSend.size()); // prepare container + each in invoke after
 			toSendRequest->push_back(mtpc_msg_container);
 			toSendRequest->push_back(toSendCount);
 
@@ -1428,17 +1514,10 @@ void MTProtoConnectionPrivate::tryToSend() {
 			haveSentIdsWrap->resize(haveSentIdsWrap->size() + idsWrapSize);
 			mtpMsgId *haveSentArr = (mtpMsgId*)(haveSentIdsWrap->data() + 8);
 
-			if (havePrepend) {
-				mtpMsgId msgId = prepareToSend(prepend, bigMsgId);
-				if (msgId > bigMsgId) msgId = replaceMsgId(prepend, bigMsgId);
-				if (msgId >= bigMsgId) bigMsgId = msgid();
-				*(haveSentArr++) = msgId;
-				if (havePrepend) pingMsgId = msgId;
-
-				uint32 from = toSendRequest->size(), len = mtpRequestData::messageSize(prepend);
-				toSendRequest->resize(from + len);
-				memcpy(toSendRequest->data() + from, prepend->constData() + 4, len * sizeof(mtpPrime));
-
+			if (pingRequest) {
+				pingMsgId = placeToContainer(toSendRequest, bigMsgId, haveSentArr, pingRequest);
+				needAnyResponse = true;
+			} else if (resendRequest || stateRequest) {
 				needAnyResponse = true;
 			}
 			for (mtpPreRequestMap::iterator i = toSend.begin(), e = toSend.end(); i != e; ++i) {
@@ -1447,10 +1526,14 @@ void MTProtoConnectionPrivate::tryToSend() {
 				if (msgId > bigMsgId) msgId = replaceMsgId(req, bigMsgId);
 				if (msgId >= bigMsgId) bigMsgId = msgid();
 				*(haveSentArr++) = msgId;
-
+				bool added = false;
 				if (req->requestId) {
 					if (mtpRequestData::needAck(req)) {
-						req->msDate = mtpRequestData::isStateRequest(req) ? 0 : getms();
+						req->msDate = mtpRequestData::isStateRequest(req) ? 0 : getms(true);
+						if (req->after) {
+							_mtp_internal::wrapInvokeAfter(toSendRequest, req, haveSent);
+							added = true;
+						}
 						haveSent.insert(msgId, req);
 
 						needAnyResponse = true;
@@ -1458,10 +1541,19 @@ void MTProtoConnectionPrivate::tryToSend() {
 						wereAcked.insert(msgId, req->requestId);
 					}
 				}
-				uint32 from = toSendRequest->size(), len = mtpRequestData::messageSize(req);
-				toSendRequest->resize(from + len);
-				memcpy(toSendRequest->data() + from, req->constData() + 4, len * sizeof(mtpPrime));
+				if (!added) {
+					uint32 from = toSendRequest->size(), len = mtpRequestData::messageSize(req);
+					toSendRequest->resize(from + len);
+					memcpy(toSendRequest->data() + from, req->constData() + 4, len * sizeof(mtpPrime));
+				}
 			}
+			if (stateRequest) {
+				mtpMsgId msgId = placeToContainer(toSendRequest, bigMsgId, haveSentArr, stateRequest);
+				stateRequest->msDate = 0; // 0 for state request, do not request state of it
+				haveSent.insert(msgId, stateRequest);
+			}
+			if (resendRequest) placeToContainer(toSendRequest, bigMsgId, haveSentArr, resendRequest);
+			if (ackRequest) placeToContainer(toSendRequest, bigMsgId, haveSentArr, ackRequest);
 
 			mtpMsgId contMsgId = prepareToSend(toSendRequest, bigMsgId);
 			*(mtpMsgId*)(haveSentIdsWrap->data() + 4) = contMsgId;
@@ -1475,6 +1567,9 @@ void MTProtoConnectionPrivate::tryToSend() {
 }
 
 void MTProtoConnectionPrivate::retryByTimer() {
+	QReadLocker lockFinished(&sessionDataMutex);
+	if (!sessionData) return;
+
 	if (retryTimeout < 3) {
 		++retryTimeout;
 	} else if (retryTimeout == 3) {
@@ -1537,6 +1632,9 @@ void MTProtoConnectionPrivate::socketStart(bool afterConfig) {
 }
 
 void MTProtoConnectionPrivate::restart(bool maybeBadKey) {
+	QReadLocker lockFinished(&sessionDataMutex);
+	if (!sessionData) return;
+
 	DEBUG_LOG(("MTP Info: restarting MTProtoConnection, maybe bad key = %1").arg(logBool(maybeBadKey)));
 
 	connCheckTimer.stop();
@@ -1576,9 +1674,14 @@ void MTProtoConnectionPrivate::onSentSome(uint64 size) {
 				DEBUG_LOG(("Checking connect for request with size %1 bytes, delay will be %2").arg(size).arg(remain));
 			}
 		}
+		if (dc >= MTP::upl[0] && dc < MTP::upl[MTPUploadSessionsCount - 1] + _mtp_internal::dcShift) {
+			remain *= MTPUploadSessionsCount;
+		} else if (dc >= MTP::dld[0] && dc < MTP::dld[MTPDownloadSessionsCount - 1] + _mtp_internal::dcShift) {
+			remain *= MTPDownloadSessionsCount;
+		}
 		connCheckTimer.start(remain);
 	}
-	if (!firstSentAt) firstSentAt = getms();
+	if (!firstSentAt) firstSentAt = getms(true);
 }
 
 void MTProtoConnectionPrivate::onReceivedSome() {
@@ -1589,7 +1692,7 @@ void MTProtoConnectionPrivate::onReceivedSome() {
 	oldConnectionTimer.start(MTPConnectionOldTimeout);
 	connCheckTimer.stop();
 	if (firstSentAt > 0) {
-		int32 ms = getms() - firstSentAt;
+		int32 ms = getms(true) - firstSentAt;
 		DEBUG_LOG(("MTP Info: response in %1ms, receiveDelay: %2ms").arg(ms).arg(receiveDelay));
 
 		if (ms > 0 && ms * 2 < int32(receiveDelay)) receiveDelay = qMax(ms * 2, int32(MinReceiveDelay));
@@ -1646,6 +1749,9 @@ void MTProtoConnectionPrivate::doFinish() {
 }
 
 void MTProtoConnectionPrivate::handleReceived() {
+	QReadLocker lockFinished(&sessionDataMutex);
+	if (!sessionData) return;
+
 	onReceivedSome();
 
 	ReadLockerAttempt lock(sessionData->keyMutex());
@@ -1746,7 +1852,7 @@ void MTProtoConnectionPrivate::handleReceived() {
 			serverSalt = 0; // dont pass to handle method, so not to lock in setSalt()
 		}
 
-		if (needAck) ackRequestData->push_back(MTP_long(msgId));
+		if (needAck) ackRequestData.push_back(MTP_long(msgId));
 
 		int32 res = 1; // if no need to handle, then succeed
 		end = data + 8 + (msgLen >> 2);
@@ -1756,7 +1862,7 @@ void MTProtoConnectionPrivate::handleReceived() {
 		bool needToHandle = false;
 		{
 			QWriteLocker lock(sessionData->receivedIdsMutex());
-			mtpMsgIdsSet &receivedIds(sessionData->receivedIdsSet());
+			mtpMsgIdsMap &receivedIds(sessionData->receivedIdsSet());
 			needToHandle = receivedIds.insert(msgId, needAck);
 		}
 		if (needToHandle) {
@@ -1764,7 +1870,7 @@ void MTProtoConnectionPrivate::handleReceived() {
 		}
 		{
 			QWriteLocker lock(sessionData->receivedIdsMutex());
-			mtpMsgIdsSet &receivedIds(sessionData->receivedIdsSet());
+			mtpMsgIdsMap &receivedIds(sessionData->receivedIdsSet());
 			uint32 receivedIdsSize = receivedIds.size();
 			while (receivedIdsSize-- > MTPIdsBufferSize) {
 				receivedIds.erase(receivedIds.begin());
@@ -1772,11 +1878,10 @@ void MTProtoConnectionPrivate::handleReceived() {
 		}
 
 		// send acks
-		uint32 toAckSize = ackRequestData->size();
+		uint32 toAckSize = ackRequestData.size();
 		if (toAckSize) {
-			DEBUG_LOG(("MTP Info: sending %1 acks, ids: %2").arg(toAckSize).arg(logVectorLong(*ackRequestData)));
-			sessionData->owner()->send(ackRequest, RPCResponseHandler(), 10000);
-			ackRequestData->clear();
+			DEBUG_LOG(("MTP Info: will send %1 acks, ids: %2").arg(toAckSize).arg(logVectorLong(ackRequestData)));
+			sessionData->owner()->sendAnything(MTPAckSendWaiting);
 		}
 
 		bool emitSignal = false;
@@ -1853,7 +1958,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 			}
 
 			bool needAck = (inSeqNo.v & 0x01);
-			if (needAck) ackRequestData->push_back(inMsgId);
+			if (needAck) ackRequestData.push_back(inMsgId);
 
 			DEBUG_LOG(("Message Info: message from container, msg_id: %1, needAck: %2").arg(inMsgId.v).arg(logBool(needAck)));
 
@@ -1863,7 +1968,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 			bool needToHandle = false;
 			{
 				QWriteLocker lock(sessionData->receivedIdsMutex());
-				mtpMsgIdsSet &receivedIds(sessionData->receivedIdsSet());
+				mtpMsgIdsMap &receivedIds(sessionData->receivedIdsSet());
 				needToHandle = receivedIds.insert(inMsgId.v, needAck);
 			}
 			int32 res = 1; // if no need to handle, then succeed
@@ -1902,6 +2007,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 		const MTPDbad_msg_notification &data(msg.c_bad_msg_notification());
 		LOG(("Message Info: bad message notification received (error_code %3) for msg_id = %1, seq_no = %2").arg(data.vbad_msg_id.v).arg(data.vbad_msg_seqno.v).arg(data.verror_code.v));
 
+		mtpMsgId resendId = data.vbad_msg_id.v;
 		int32 errorCode = data.verror_code.v;
 		if (errorCode == 16 || errorCode == 17 || errorCode == 32 || errorCode == 33 || errorCode == 64) { // can handle
 			bool needResend = (errorCode == 16 || errorCode == 17); // bad msg_id
@@ -1913,12 +2019,12 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 						QWriteLocker locker(sessionData->haveSentMutex());
 						mtpRequestMap &haveSent(sessionData->haveSentMap());
 
-						mtpRequestMap::iterator i = haveSent.find(msgId);
-						if (i == haveSent.end()) {
+						mtpRequestMap::const_iterator i = haveSent.constFind(resendId);
+						if (i == haveSent.cend()) {
 							LOG(("Message Error: Container not found!"));
+						} else {
+							request = i.value();
 						}
-
-						request = i.value();
 					}
 					if (request) {
 						if (mtpRequestData::isSentContainer(request)) {
@@ -1935,7 +2041,6 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 				}
 			}
 
-			mtpMsgId resendId = data.vbad_msg_id.v;
 			if (!wasSent(resendId)) {
 				DEBUG_LOG(("Message Error: such message was not sent recently %1").arg(resendId));
 				return (badTime ? 0 : 1);
@@ -2015,8 +2120,8 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 
 		{
 			QReadLocker lock(sessionData->receivedIdsMutex());
-			const mtpMsgIdsSet &receivedIds(sessionData->receivedIdsSet());
-			mtpMsgIdsSet::const_iterator receivedIdsEnd(receivedIds.cend());
+			const mtpMsgIdsMap &receivedIds(sessionData->receivedIdsSet());
+			mtpMsgIdsMap::const_iterator receivedIdsEnd(receivedIds.cend());
 			uint64 minRecv = receivedIds.min(), maxRecv = receivedIds.max();
 
 			QReadLocker locker(sessionData->wereAckedMutex());
@@ -2031,7 +2136,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 				} else if (reqMsgId > maxRecv) {
 					state |= 0x03;
 				} else {
-					mtpMsgIdsSet::const_iterator recv = receivedIds.constFind(reqMsgId);
+					mtpMsgIdsMap::const_iterator recv = receivedIds.constFind(reqMsgId);
 					if (recv == receivedIdsEnd) {
 						state |= 0x02;
 					} else {
@@ -2060,7 +2165,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 		uint64 reqMsgId = data.vreq_msg_id.v;
 		const string &states(data.vinfo.c_string().v);
 
-		DEBUG_LOG(("Message Info: msg state received, msgId %1, reqMsgId: %2, states %3").arg(msgId).arg(reqMsgId).arg(mb(states.data(), states.length()).str()));
+		DEBUG_LOG(("Message Info: msg state received, msgId %1, reqMsgId: %2, HEX states %3").arg(msgId).arg(reqMsgId).arg(mb(states.data(), states.length()).str()));
 		mtpRequest requestBuffer;
 		{ // find this request in session-shared sent requests map
 			QReadLocker locker(sessionData->haveSentMutex());
@@ -2070,15 +2175,19 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 				DEBUG_LOG(("Message Error: such message was not sent recently %1").arg(reqMsgId));
 				return (badTime ? 0 : 1);
 			}
-			if (serverSalt) sessionData->setSalt(serverSalt); // requestsFixTimeSalt with no lookup
-			unixtimeSet(serverTime, true);
+			if (badTime) {
+				if (serverSalt) sessionData->setSalt(serverSalt); // requestsFixTimeSalt with no lookup
+				unixtimeSet(serverTime, true);
 
-			DEBUG_LOG(("Message Info: unixtime updated from mtpc_msgs_state_info, now %1").arg(serverTime));
+				DEBUG_LOG(("Message Info: unixtime updated from mtpc_msgs_state_info, now %1").arg(serverTime));
 
-			badTime = false;
+				badTime = false;
+			}
 			requestBuffer = replyTo.value();
 		}
-		QVector<MTPlong> toAck(1, MTP_long(reqMsgId));
+		QVector<MTPlong> toAckReq(1, MTP_long(reqMsgId)), toAck;
+		requestsAcked(toAck, true);
+
 		if (requestBuffer->size() < 9) {
 			LOG(("Message Error: bad request %1 found in requestMap, size: %2").arg(reqMsgId).arg(requestBuffer->size()));
 			return -1;
@@ -2140,14 +2249,14 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 		MTPlong resMsgId = data.vanswer_msg_id;
 		{
 			QReadLocker lock(sessionData->receivedIdsMutex());
-			const mtpMsgIdsSet &receivedIds(sessionData->receivedIdsSet());
+			const mtpMsgIdsMap &receivedIds(sessionData->receivedIdsSet());
 			received = (receivedIds.find(resMsgId.v) != receivedIds.cend()) && (receivedIds.min() < resMsgId.v);
 		}
-		if (!received) {
+		if (received) {
+			ackRequestData.push_back(resMsgId);
+		} else {
 			DEBUG_LOG(("Message Info: answer message %1 was not received, requesting..").arg(resMsgId.v));
-			MTPMsgResendReq resendRequest(MTP_msg_resend_req(MTPVector<MTPlong>(1)));
-			resendRequest._msg_resend_req().vmsg_ids._vector().v.push_back(resMsgId);
-			sessionData->owner()->send(resendRequest);
+			resendRequestData.push_back(resMsgId);
 		}
 	} return 1;
 
@@ -2165,14 +2274,14 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 		MTPlong resMsgId = data.vanswer_msg_id;
 		{
 			QReadLocker lock(sessionData->receivedIdsMutex());
-			const mtpMsgIdsSet &receivedIds(sessionData->receivedIdsSet());
+			const mtpMsgIdsMap &receivedIds(sessionData->receivedIdsSet());
 			received = (receivedIds.find(resMsgId.v) != receivedIds.cend()) && (receivedIds.min() < resMsgId.v);
 		}
-		if (!received) {
+		if (received) {
+			ackRequestData.push_back(resMsgId);
+		} else {
 			DEBUG_LOG(("Message Info: answer message %1 was not received, requesting..").arg(resMsgId.v));
-			MTPMsgResendReq resendRequest(MTP_msg_resend_req(MTPVector<MTPlong>(1)));
-			resendRequest._msg_resend_req().vmsg_ids._vector().v.push_back(resMsgId);
-			sessionData->owner()->send(resendRequest);
+			resendRequestData.push_back(resMsgId);
 		}
 	} return 1;
 	
@@ -2207,7 +2316,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 				return 0;
 			}
 		}
-		requestsAcked(ids);
+		requestsAcked(ids, true);
 
 		if (typeId == mtpc_gzip_packed) {
 			DEBUG_LOG(("RPC Info: gzip container"));
@@ -2294,7 +2403,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 				return 0;
 			}
 		}
-		requestsAcked(ids);
+		requestsAcked(ids, true);
 
 		retryTimeout = 1; // reset restart() timer
 	} return 1;
@@ -2385,7 +2494,7 @@ bool MTProtoConnectionPrivate::requestsFixTimeSalt(const QVector<MTPlong> &ids, 
 	return false;
 }
 
-void MTProtoConnectionPrivate::requestsAcked(const QVector<MTPlong> &ids) {
+void MTProtoConnectionPrivate::requestsAcked(const QVector<MTPlong> &ids, bool byResponse) {
 	uint32 idsCount = ids.size();
 
 	DEBUG_LOG(("Message Info: requests acked, ids %1").arg(logVectorLong(ids)));
@@ -2412,10 +2521,20 @@ void MTProtoConnectionPrivate::requestsAcked(const QVector<MTPlong> &ids) {
 						for (uint32 j = 0; j < inContCount; ++j) {
 							toAckMore.push_back(MTP_long(*(inContId++)));
 						}
+						haveSent.erase(req);
 					} else {
-						wereAcked.insert(msgId, req.value()->requestId);
+						mtpRequestId reqId = req.value()->requestId;
+						bool moveToAcked = byResponse;
+						if (!moveToAcked) { // ignore ACK, if we need a response (if we have a handler)
+							moveToAcked = !_mtp_internal::hasCallbacks(reqId);
+						}
+						if (moveToAcked) {
+							wereAcked.insert(msgId, reqId);
+							haveSent.erase(req);
+						} else {
+							DEBUG_LOG(("Message Info: ignoring ACK for msgId %1 because request %2 requires a response").arg(msgId).arg(reqId));
+						}
 					}
-					haveSent.erase(req);
 				} else {
 					DEBUG_LOG(("Message Info: msgId %1 was not found in recent sent, while acking requests, searching in resend..").arg(msgId));
 					QWriteLocker locker3(sessionData->toResendMutex());
@@ -2423,21 +2542,29 @@ void MTProtoConnectionPrivate::requestsAcked(const QVector<MTPlong> &ids) {
 					mtpRequestIdsMap::iterator reqIt = toResend.find(msgId);
 					if (reqIt != toResend.cend()) {
 						mtpRequestId reqId = reqIt.value();
-						QWriteLocker locker4(sessionData->toSendMutex());
-						mtpPreRequestMap &toSend(sessionData->toSendMap());
-						mtpPreRequestMap::iterator req = toSend.find(reqId);
-						if (req != toSend.cend()) {
-							wereAcked.insert(msgId, req.value()->requestId);
-							if (req.value()->requestId != reqId) {
-								DEBUG_LOG(("Message Error: for msgId %1 found resent request, requestId %2, contains requestId %3").arg(msgId).arg(reqId).arg(req.value()->requestId));
-							} else {
-								DEBUG_LOG(("Message Info: acked msgId %1 that was prepared to resend, requestId %2").arg(msgId).arg(reqId));
-							}
-							toSend.erase(req);
-						} else {
-							DEBUG_LOG(("Message Info: msgId %1 was found in recent resent, requestId %2 was not found in prepared to send").arg(msgId));
+						bool moveToAcked = byResponse;
+						if (!moveToAcked) { // ignore ACK, if we need a response (if we have a handler)
+							moveToAcked = !_mtp_internal::hasCallbacks(reqId);
 						}
-						toResend.erase(reqIt);
+						if (moveToAcked) {
+							QWriteLocker locker4(sessionData->toSendMutex());
+							mtpPreRequestMap &toSend(sessionData->toSendMap());
+							mtpPreRequestMap::iterator req = toSend.find(reqId);
+							if (req != toSend.cend()) {
+								wereAcked.insert(msgId, req.value()->requestId);
+								if (req.value()->requestId != reqId) {
+									DEBUG_LOG(("Message Error: for msgId %1 found resent request, requestId %2, contains requestId %3").arg(msgId).arg(reqId).arg(req.value()->requestId));
+								} else {
+									DEBUG_LOG(("Message Info: acked msgId %1 that was prepared to resend, requestId %2").arg(msgId).arg(reqId));
+								}
+								toSend.erase(req);
+							} else {
+								DEBUG_LOG(("Message Info: msgId %1 was found in recent resent, requestId %2 was not found in prepared to send").arg(msgId));
+							}
+							toResend.erase(reqIt);
+						} else {
+							DEBUG_LOG(("Message Info: ignoring ACK for msgId %1 because request %2 requires a response").arg(msgId).arg(reqId));
+						}
 					} else {
 						DEBUG_LOG(("Message Info: msgId %1 was not found in recent resent either").arg(msgId));
 					}
@@ -2516,6 +2643,9 @@ mtpRequestId MTProtoConnectionPrivate::resend(mtpMsgId msgId, uint64 msCanWait, 
 }
 
 void MTProtoConnectionPrivate::onConnected() {
+	QReadLocker lockFinished(&sessionDataMutex);
+	if (!sessionData) return;
+
 	disconnect(conn, SIGNAL(connected()), this, SLOT(onConnected()));
 	if (!conn->isConnected()) {
 		LOG(("Connection Error: not connected in onConnected(), state: %1").arg(conn->debugState()));
@@ -2541,6 +2671,7 @@ void MTProtoConnectionPrivate::onConnected() {
 	}
 
 	authKeyData = new MTProtoConnectionPrivate::AuthKeyCreateData();
+	authKeyStrings = new MTProtoConnectionPrivate::AuthKeyCreateStrings();
 	authKeyData->req_num = 0;
 	authKeyData->nonce = MTP::nonce<MTPint128>();
 
@@ -2554,7 +2685,8 @@ void MTProtoConnectionPrivate::onConnected() {
 }
 
 bool MTProtoConnectionPrivate::updateAuthKey() 	{
-	if (!conn) return false;
+	QReadLocker lockFinished(&sessionDataMutex);
+	if (!sessionData || !conn) return false;
 
 	DEBUG_LOG(("AuthKey Info: MTProtoConnection updating key from MTProtoSession, dc %1").arg(dc));
 	uint64 newKeyId = 0;
@@ -2779,9 +2911,9 @@ void MTProtoConnectionPrivate::dhParamsAnswered() {
 			return restart();
 		}
 
-		authKeyData->dh_prime = dhPrime;
+		authKeyStrings->dh_prime = QByteArray(dhPrime.data(), dhPrime.size());
 		authKeyData->g = dh_inner_data.vg.v;
-		authKeyData->g_a = g_a;
+		authKeyStrings->g_a = QByteArray(g_a.data(), g_a.size());
 		authKeyData->retry_id = MTP_long(0);
 		authKeyData->retries = 0;
 	} return dhClientParamsSend();
@@ -2831,7 +2963,7 @@ void MTProtoConnectionPrivate::dhClientParamsSend() {
 
 	// count g_b and auth_key using openssl BIGNUM methods
 	_BigNumCounter bnCounter;
-	if (!bnCounter.count(b, &authKeyData->dh_prime[0], authKeyData->g, g_b, &authKeyData->g_a[0], authKeyData->auth_key)) {
+	if (!bnCounter.count(b, authKeyStrings->dh_prime.constData(), authKeyData->g, g_b, authKeyStrings->g_a.constData(), authKeyData->auth_key)) {
 		return dhClientParamsSend();
 	}
 
@@ -2874,6 +3006,9 @@ void MTProtoConnectionPrivate::dhClientParamsSend() {
 }
 
 void MTProtoConnectionPrivate::dhClientParamsAnswered() {
+	QReadLocker lockFinished(&sessionDataMutex);
+	if (!sessionData) return;
+
 	disconnect(conn, SIGNAL(receivedData()), this, SLOT(dhClientParamsAnswered()));
 	DEBUG_LOG(("AuthKey Info: receiving Req_client_DH_params answer.."));
 
@@ -2991,17 +3126,23 @@ void MTProtoConnectionPrivate::authKeyCreated() {
 void MTProtoConnectionPrivate::clearAuthKeyData() {
 	if (authKeyData) {
 #ifdef Q_OS_WIN // TODO
-//		SecureZeroMemory(authKeyData, sizeof(AuthKeyCreateData));
+		SecureZeroMemory(authKeyData, sizeof(AuthKeyCreateData));
+		if (!authKeyStrings->dh_prime.isEmpty()) SecureZeroMemory(authKeyStrings->dh_prime.data(), authKeyStrings->dh_prime.size());
+		if (!authKeyStrings->g_a.isEmpty()) SecureZeroMemory(authKeyStrings->g_a.data(), authKeyStrings->g_a.size());
 #else
-//        memset(authKeyData, 0, sizeof(AuthKeyCreateData));
+		memset(authKeyData, 0, sizeof(AuthKeyCreateData));
+		if (!authKeyStrings->dh_prime.isEmpty()) memset(authKeyStrings->dh_prime.data(), 0, authKeyStrings->dh_prime.size());
+		if (!authKeyStrings->g_a.isEmpty()) memset(authKeyStrings->g_a.data(), 0, authKeyStrings->g_a.size());
 #endif
         delete authKeyData;
 		authKeyData = 0;
+		delete authKeyStrings;
+		authKeyStrings = 0;
 	}
 }
 
 void MTProtoConnectionPrivate::sendPing() {
-	sessionData->owner()->send(MTPPing(MTPping(MTP::nonce<MTPlong>())));
+	sessionData->owner()->send(MTPPing(MTP::nonce<MTPlong>()));
 }
 
 void MTProtoConnectionPrivate::onError(bool mayBeBadKey) {
@@ -3162,6 +3303,9 @@ void MTProtoConnectionPrivate::lockKey() {
 }
 
 void MTProtoConnectionPrivate::unlockKey() {
+	QReadLocker lockFinished(&sessionDataMutex);
+	if (!sessionData) return;
+
 	if (myKeyLock) {
 		myKeyLock = false;
 		sessionData->keyMutex()->unlock();
@@ -3170,6 +3314,11 @@ void MTProtoConnectionPrivate::unlockKey() {
 
 MTProtoConnectionPrivate::~MTProtoConnectionPrivate() {
 	doDisconnect();
+}
+
+void MTProtoConnectionPrivate::stop() {
+	QWriteLocker lockFinished(&sessionDataMutex);
+	sessionData = 0;
 }
 
 MTProtoConnection::~MTProtoConnection() {

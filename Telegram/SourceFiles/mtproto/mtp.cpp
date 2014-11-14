@@ -36,9 +36,11 @@ namespace {
 	
 	typedef QMap<mtpRequestId, RPCResponseHandler> ParserMap;
 	ParserMap parserMap;
+	QMutex parserMapLock;
 
 	typedef QMap<mtpRequestId, mtpRequest> RequestMap;
 	RequestMap requestMap;
+	QReadWriteLock requestMapLock;
 
 	typedef QPair<mtpRequestId, uint64> DelayedRequest;
 	typedef QList<DelayedRequest> DelayedRequestsList;
@@ -62,7 +64,8 @@ namespace {
 	mtpAuthKey _localKey;
 
 	void importDone(const MTPauth_Authorization &result, mtpRequestId req) {
-		QMutexLocker locker(&requestByDCLock);
+		QMutexLocker locker1(&requestByDCLock);
+
 		RequestsByDC::iterator i = requestsByDC.find(req);
 		if (i == requestsByDC.end()) {
 			LOG(("MTP Error: auth import request not found in requestsByDC, requestId: %1").arg(req));
@@ -77,6 +80,7 @@ namespace {
 		DCAuthWaiters &waiters(authWaiters[newdc]);
 		MTProtoSessionPtr session(_mtp_internal::getSession(newdc));
 		if (waiters.size()) {
+			QReadLocker locker(&requestMapLock);
 			for (DCAuthWaiters::iterator i = waiters.begin(), e = waiters.end(); i != e; ++i) {
 				mtpRequestId requestId = *i;
 				RequestMap::const_iterator j = requestMap.constFind(requestId);
@@ -166,19 +170,24 @@ namespace {
 				}
 			}
 
-			RequestMap::const_iterator i = requestMap.constFind(requestId);
-			if (i == requestMap.cend()) {
-				LOG(("MTP Error: could not find request %1").arg(requestId));
-				return false;
+			mtpRequest req;
+			{
+				QReadLocker locker(&requestMapLock);
+				RequestMap::const_iterator i = requestMap.constFind(requestId);
+				if (i == requestMap.cend()) {
+					LOG(("MTP Error: could not find request %1").arg(requestId));
+					return false;
+				}
+				req = i.value();
 			}
 			_mtp_internal::registerRequest(requestId, (dc < 0) ? -newdc : newdc);
-			_mtp_internal::getSession(newdc)->sendPrepared(i.value());
+			_mtp_internal::getSession(newdc)->sendPrepared(req);
 			return true;
 		} else if ((m = QRegularExpression("^FLOOD_WAIT_(\\d+)$").match(err)).hasMatch()) {
 			if (!requestId) return false;
 			
 			int32 secs = m.captured(1).toInt();
-			uint64 sendAt = getms() + secs * 1000 + 10;
+			uint64 sendAt = getms(true) + secs * 1000 + 10;
 			DelayedRequestsList::iterator i = delayedRequests.begin(), e = delayedRequests.end();
 			for (; i != e; ++i) {
 				if (i->first == requestId) return true;
@@ -215,10 +224,15 @@ namespace {
 			if (badGuestDC) badGuestDCRequests.insert(requestId);
 			return true;
 		} else if (err == qsl("CONNECTION_NOT_INITED") || err == qsl("CONNECTION_LAYER_INVALID")) {
-			RequestMap::const_iterator i = requestMap.constFind(requestId);
-			if (i == requestMap.cend()) {
-				LOG(("MTP Error: could not find request %1").arg(requestId));
-				return false;
+			mtpRequest req;
+			{
+				QReadLocker locker(&requestMapLock);
+				RequestMap::const_iterator i = requestMap.constFind(requestId);
+				if (i == requestMap.cend()) {
+					LOG(("MTP Error: could not find request %1").arg(requestId));
+					return false;
+				}
+				req = i.value();
 			}
 			int32 dc = 0;
 			{
@@ -232,7 +246,66 @@ namespace {
 			}
 			if (!dc) return false;
 
-			_mtp_internal::getSession(dc < 0 ? (-dc) : dc)->sendPreparedWithInit(i.value());
+			_mtp_internal::getSession(dc < 0 ? (-dc) : dc)->sendPreparedWithInit(req);
+			return true;
+		} else if (err == qsl("MSG_WAIT_FAILED")) {
+			mtpRequest req;
+			{
+				QReadLocker locker(&requestMapLock);
+				RequestMap::const_iterator i = requestMap.constFind(requestId);
+				if (i == requestMap.cend()) {
+					LOG(("MTP Error: could not find request %1").arg(requestId));
+					return false;
+				}
+				req = i.value();
+			}
+			if (!req->after) {
+				LOG(("MTP Error: wait failed for not dependent request %1").arg(requestId));
+				return false;
+			}
+			int32 dc = 0;
+			{
+				QMutexLocker locker(&requestByDCLock);
+				RequestsByDC::iterator i = requestsByDC.find(requestId), j = requestsByDC.find(req->after->requestId);
+				if (i == requestsByDC.end()) {
+					LOG(("MTP Error: could not find request %1 by dc").arg(requestId));
+				} else if (j == requestsByDC.end()) {
+					LOG(("MTP Error: could not find dependent request %1 by dc").arg(req->after->requestId));
+				} else {
+					dc = i.value();
+					if (i.value() != j.value()) {
+						req->after = mtpRequest();
+					}
+				}
+			}
+			if (!dc) return false;
+
+			if (!req->after) {
+				_mtp_internal::getSession(dc < 0 ? (-dc) : dc)->sendPreparedWithInit(req);
+			} else {
+				int32 newdc = abs(dc) % _mtp_internal::dcShift;
+				DCAuthWaiters &waiters(authWaiters[newdc]);
+				if (waiters.indexOf(req->after->requestId) >= 0) {
+					if (waiters.indexOf(requestId) < 0) {
+						waiters.push_back(requestId);
+					}
+					if (badGuestDCRequests.constFind(req->after->requestId) != badGuestDCRequests.cend()) {
+						if (badGuestDCRequests.constFind(requestId) == badGuestDCRequests.cend()) {
+							badGuestDCRequests.insert(requestId);
+						}
+					}
+				} else {
+					uint64 at = 0;
+					DelayedRequestsList::iterator i = delayedRequests.begin(), e = delayedRequests.end();
+					for (; i != e; ++i) {
+						if (i->first == requestId) return true;
+						if (i->first == req->after->requestId) break;
+					}
+					if (i != e) {
+						delayedRequests.insert(i, DelayedRequest(requestId, i->second));
+					}
+				}
+			}
 			return true;
 		}
 		if (badGuestDC) badGuestDCRequests.remove(requestId);
@@ -268,11 +341,13 @@ namespace _mtp_internal {
 	}
 
 	void unregisterRequest(mtpRequestId requestId) {
-		QMutexLocker locker(&requestByDCLock);
-		RequestsByDC::iterator i = requestsByDC.find(requestId);
-		if (i != requestsByDC.end()) {
-			requestsByDC.erase(i);
+		{
+			QWriteLocker locker(&requestMapLock);
+			requestMap.remove(requestId);
 		}
+
+		QMutexLocker locker(&requestByDCLock);
+		requestsByDC.remove(requestId);
 	}
 
 	uint32 getLayer() {
@@ -283,30 +358,61 @@ namespace _mtp_internal {
 		mtpRequestId res = reqid();
 		request->requestId = res;
 		if (parser.onDone || parser.onFail) {
+			QMutexLocker locker(&parserMapLock);
 			parserMap.insert(res, parser);
+		}
+		{
+			QWriteLocker locker(&requestMapLock);
 			requestMap.insert(res, request);
 		}
 		return res;
 	}
 
-	void replaceRequest(mtpRequest &newRequest, const mtpRequest &oldRequest) {
-		newRequest->requestId = oldRequest->requestId;
-		RequestMap::iterator i = requestMap.find(oldRequest->requestId);
-		if (i != requestMap.cend()) {
-			i.value() = newRequest;
+	mtpRequest getRequest(mtpRequestId reqId) {
+		static mtpRequest zero;
+		mtpRequest req;
+		{
+			QReadLocker locker(&requestMapLock);
+			RequestMap::const_iterator i = requestMap.constFind(reqId);
+			req = (i == requestMap.cend()) ? zero : i.value();
+		}
+		return req;
+	}
+
+	void wrapInvokeAfter(mtpRequest &to, const mtpRequest &from, const mtpRequestMap &haveSent) {
+		mtpMsgId afterId(*(mtpMsgId*)(from->after->data() + 4));
+		mtpRequestMap::const_iterator i = afterId ? haveSent.constFind(afterId) : haveSent.cend();
+		int32 size = to->size(), len = (*from)[7] >> 2, headlen = 4, fulllen = headlen + len;
+		if (i == haveSent.constEnd()) { // no invoke after or such msg was not sent or was completed recently
+			to->resize(size + fulllen);
+			memcpy(to->data() + size, from->constData() + 4, fulllen * sizeof(mtpPrime));
+		} else {
+			to->resize(size + fulllen + 3);
+			memcpy(to->data() + size, from->constData() + 4, headlen * sizeof(mtpPrime));
+			(*to)[size + 3] += 3 * sizeof(mtpPrime);
+			*((mtpTypeId*)&((*to)[size + headlen])) = mtpc_invokeAfterMsg;
+			memcpy(to->data() + size + headlen + 1, &afterId, 2 * sizeof(mtpPrime));
+			memcpy(to->data() + size + headlen + 3, from->constData() + 4 + headlen, len * sizeof(mtpPrime));
+			if (size + 3 != 7) (*to)[7] += 3 * sizeof(mtpPrime);
 		}
 	}
 
 	void clearCallbacks(mtpRequestId requestId, int32 errorCode) {
-		ParserMap::iterator i = parserMap.find(requestId);
-		if (i != parserMap.end()) {
-			if (errorCode) {
-				rpcErrorOccured(requestId, i.value(), rpcClientError("CLEAR_CALLBACK", QString("did not handle request %1, error code %2").arg(requestId).arg(errorCode)));
+		RPCResponseHandler h;
+		bool found = false;
+		{
+			QMutexLocker locker(&parserMapLock);
+			ParserMap::iterator i = parserMap.find(requestId);
+			if (i != parserMap.end()) {
+				h = i.value();
+				found = true;
+
+				parserMap.erase(i);
 			}
-			parserMap.erase(i);
 		}
-		requestMap.remove(requestId);
-		_mtp_internal::unregisterRequest(requestId);
+		if (errorCode && found) {
+			rpcErrorOccured(requestId, h, rpcClientError("CLEAR_CALLBACK", QString("did not handle request %1, error code %2").arg(requestId).arg(errorCode)));
+		}
 	}
 
 	void clearCallbacksDelayed(const RPCCallbackClears &requestIds) {
@@ -336,23 +442,31 @@ namespace _mtp_internal {
 		if (!toClear.isEmpty()) {
 			for (RPCCallbackClears::iterator i = toClear.begin(), e = toClear.end(); i != e; ++i) {
 				if (cDebug()) {
+					QMutexLocker locker(&parserMapLock);
 					if (parserMap.find(i->requestId) != parserMap.end()) {
 						DEBUG_LOG(("RPC Info: clearing delayed callback %1, error code %2").arg(i->requestId).arg(i->errorCode));
 					}
 				}
 				clearCallbacks(i->requestId, i->errorCode);
+				_mtp_internal::unregisterRequest(i->requestId);
 			}
 			toClear.clear();
 		}
 	}
 
 	void execCallback(mtpRequestId requestId, const mtpPrime *from, const mtpPrime *end) {
-		ParserMap::iterator i = parserMap.find(requestId);
-		if (i != parserMap.cend()) {
-			RPCResponseHandler h(i.value());
-			parserMap.erase(i);
+		RPCResponseHandler h;
+		{
+			QMutexLocker locker(&parserMapLock);
+			ParserMap::iterator i = parserMap.find(requestId);
+			if (i != parserMap.cend()) {
+				h = i.value();
+				parserMap.erase(i);
 
-			DEBUG_LOG(("RPC Info: found parser for request %1, trying to parse response..").arg(requestId));
+				DEBUG_LOG(("RPC Info: found parser for request %1, trying to parse response..").arg(requestId));
+			}
+		}
+		if (h.onDone || h.onFail) {
 			try {
 				if (from >= end) throw mtpErrorInsufficient();
 
@@ -360,6 +474,7 @@ namespace _mtp_internal {
 					RPCError err(MTPRpcError(from, end));
 					DEBUG_LOG(("RPC Info: error received, code %1, type %2, description: %3").arg(err.code()).arg(err.type()).arg(err.description()));
 					if (!rpcErrorOccured(requestId, h, err)) {
+						QMutexLocker locker(&parserMapLock);
 						parserMap.insert(requestId, h);
 						return;
 					}
@@ -368,15 +483,21 @@ namespace _mtp_internal {
 				}
 			} catch (Exception &e) {
 				if (!rpcErrorOccured(requestId, h, rpcClientError("RESPONSE_PARSE_FAILED", QString("exception text: ") + e.what()))) {
+					QMutexLocker locker(&parserMapLock);
 					parserMap.insert(requestId, h);
 					return;
 				}
 			}
-			requestMap.remove(requestId);
 		} else {
 			DEBUG_LOG(("RPC Info: parser not found for %1").arg(requestId));
 		}
 		unregisterRequest(requestId);
+	}
+
+	bool hasCallbacks(mtpRequestId requestId) {
+		QMutexLocker locker(&parserMapLock);
+		ParserMap::iterator i = parserMap.find(requestId);
+		return (i != parserMap.cend());
 	}
 
 	void globalCallback(const mtpPrime *from, const mtpPrime *end) {
@@ -400,8 +521,12 @@ namespace _mtp_internal {
 		return true;
 	}
 
+	RequestResender::RequestResender() {
+		connect(&_timer, SIGNAL(timeout()), this, SLOT(checkDelayed()));
+	}
+
 	void RequestResender::checkDelayed() {
-		uint64 now = getms();
+		uint64 now = getms(true);
 		while (!delayedRequests.isEmpty() && now >= delayedRequests.front().second) {
 			mtpRequestId requestId = delayedRequests.front().first;
 			delayedRequests.pop_front();
@@ -418,16 +543,21 @@ namespace _mtp_internal {
 				}
 			}
 
-			RequestMap::const_iterator j = requestMap.constFind(requestId);
-			if (j == requestMap.cend()) {
-				DEBUG_LOG(("MTP Error: could not find request %1").arg(requestId));
-				continue;
+			mtpRequest req;
+			{
+				QReadLocker locker(&requestMapLock);
+				RequestMap::const_iterator j = requestMap.constFind(requestId);
+				if (j == requestMap.cend()) {
+					DEBUG_LOG(("MTP Error: could not find request %1").arg(requestId));
+					continue;
+				}
+				req = j.value();
 			}
-			_mtp_internal::getSession(dc < 0 ? (-dc) : dc)->sendPrepared(j.value(), 0, false);
+			_mtp_internal::getSession(dc < 0 ? (-dc) : dc)->sendPrepared(req, 0, false);
 		}
 
 		if (!delayedRequests.isEmpty()) {
-			QTimer::singleShot(delayedRequests.front().second - now, this, SLOT(checkDelayed()));
+			_timer.start(delayedRequests.front().second - now);
 		}
 	}
 };
@@ -552,11 +682,21 @@ namespace MTP {
 	}
 
 	void cancel(mtpRequestId requestId) {
+		mtpMsgId msgId = 0;
+		{
+			QWriteLocker locker(&requestMapLock);
+			RequestMap::iterator i = requestMap.find(requestId);
+			if (i != requestMap.end()) {
+				msgId = *(mtpMsgId*)(i.value()->constData() + 4);
+				requestMap.erase(i);
+			}
+		}
 		{
 			QMutexLocker locker(&requestByDCLock);
 			RequestsByDC::iterator i = requestsByDC.find(requestId);
 			if (i != requestsByDC.end()) {
-				_mtp_internal::getSession(abs(i.value()))->cancel(requestId);
+				_mtp_internal::getSession(abs(i.value()))->cancel(requestId, msgId);
+				requestsByDC.erase(i);
 			}
 		}
 		_mtp_internal::clearCallbacks(requestId);
@@ -586,6 +726,8 @@ namespace MTP {
 		for (Sessions::iterator i = sessions.begin(), e = sessions.end(); i != e; ++i) {
 			i.value()->stop();
 		}
+		sessions.clear();
+		mainSession = MTProtoSessionPtr();
 		delete resender;
 		resender = 0;
 		mtpDestroyConfigLoader();
