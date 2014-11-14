@@ -259,15 +259,26 @@ CONFIG(release, debug|release) {
     QMAKE_LFLAGS_RELEASE += -Ofast -flto
 }
 
-INCLUDEPATH += ./../../Libraries/QtStatic/qtbase/include/QtGui/5.3.1/QtGui\
-               ./../../Libraries/QtStatic/qtbase/include/QtCore/5.3.1/QtCore\
-               ./../../Libraries/QtStatic/qtbase/include\
-               /usr/local/include/opus\
-               /usr/include/opus\
-               ./SourceFiles\
+NO_TELEGRAM_CUSTOM_QT=no
+
+INCLUDEPATH += ./SourceFiles\
                ./GeneratedFiles
+
+#INCLUDEPATH += /usr/local/include/opus\
+#               /usr/include/opus
+
 LIBS += -lcrypto -lssl -lz -ldl -llzma -lexif -lopus -lopusfile -logg -lopenal
-LIBS += ./../../Libraries/QtStatic/qtbase/plugins/platforminputcontexts/libcomposeplatforminputcontextplugin.a
+
+equals(NO_TELEGRAM_CUSTOM_QT, no){
+    INCLUDEPATH += ./../../Libraries/QtStatic/qtbase/include/QtGui/5.3.1/QtGui\
+                   ./../../Libraries/QtStatic/qtbase/include/QtCore/5.3.1/QtCore\
+                   ./../../Libraries/QtStatic/qtbase/include
+    LIBS += ./../../Libraries/QtStatic/qtbase/plugins/platforminputcontexts/libcomposeplatforminputcontextplugin.a
+}
+
+equals(NO_TELEGRAM_CUSTOM_QT, yes){
+    DEFINES += NO_TELEGRAM_CUSTOM_QT
+}
 
 RESOURCES += \
     ./SourceFiles/telegram_linux.qrc
@@ -278,12 +289,20 @@ OTHER_FILES += \
     Resources/lang.txt
 
 linux {
-INCLUDEPATH += /usr/include/glib-2.0/\
-               /usr/include/libdbusmenu-glib-0.4\
-               /usr/include/dee-1.0\
-               /usr/lib/x86_64-linux-gnu/glib-2.0/include/
-    SOURCES += ./SourceFiles/launcher_lib.cpp
-    HEADERS += ./SourceFiles/launcher_lib.h
+    CONFIG += link_pkgconfig
 
-    LIBS += -lunity
+    packagesExist(unity){
+        SOURCES += ./SourceFiles/launcher_lib.cpp
+        HEADERS += ./SourceFiles/launcher_lib.h
+        PKGCONFIG += unity
+    }
+
+    packagesExist(opus){
+        PKGCONFIG += opus
+    }
+
+    packagesExist(opusfile){
+        PKGCONFIG += opusfile
+    }
+
 }
