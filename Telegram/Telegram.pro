@@ -264,10 +264,7 @@ NO_TELEGRAM_CUSTOM_QT=no
 INCLUDEPATH += ./SourceFiles\
                ./GeneratedFiles
 
-#INCLUDEPATH += /usr/local/include/opus\
-#               /usr/include/opus
-
-LIBS += -lcrypto -lssl -lz -ldl -llzma -lexif -lopus -lopusfile -logg -lopenal
+LIBS += -lcrypto -lssl -lz -ldl -llzma -lexif  -logg -lopenal
 
 equals(NO_TELEGRAM_CUSTOM_QT, no){
     INCLUDEPATH += ./../../Libraries/QtStatic/qtbase/include/QtGui/5.3.1/QtGui\
