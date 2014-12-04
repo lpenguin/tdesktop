@@ -1,6 +1,6 @@
 QT += core gui network widgets
 
-CONFIG += plugin static
+CONFIG += static
 
 CONFIG(debug, debug|release) {
     DEFINES += _DEBUG
@@ -266,7 +266,7 @@ NO_TELEGRAM_CUSTOM_QT=no
 INCLUDEPATH += ./SourceFiles\
                ./GeneratedFiles
 
-LIBS += -lcrypto -lssl -lz -ldl -llzma -lexif  -logg -lopenal
+LIBS += -lcrypto -lssl -lz -ldl -llzma -lexif
 
 equals(NO_TELEGRAM_CUSTOM_QT, no){
     INCLUDEPATH += ./../../Libraries/QtStatic/qtbase/include/QtGui/5.3.1/QtGui\
@@ -279,6 +279,10 @@ equals(NO_TELEGRAM_CUSTOM_QT, yes){
     DEFINES += NO_TELEGRAM_CUSTOM_QT
 }
 
+
+
+
+
 RESOURCES += \
     ./SourceFiles/telegram_linux.qrc
 
@@ -290,15 +294,17 @@ OTHER_FILES += \
 linux {
     CONFIG += link_pkgconfig
 
+    opt=./../../Libraries/opt
+#    LIBS += -L$${opt}/lib/
+    LIBS += $${opt}/lib/libopusfile.a $${opt}/lib/libopus.a $${opt}/lib/libopenal.a $${opt}/lib/libogg.a
+
     packagesExist(unity){
         SOURCES += ./SourceFiles/launcher_lib.cpp
         HEADERS += ./SourceFiles/launcher_lib.h
         PKGCONFIG += unity
     }
 
-    packagesExist(opus){
-        PKGCONFIG += opus
-    }
+    PKGCONFIG += ogg opus opusfile openal
 
     packagesExist(opusfile){
         PKGCONFIG += opusfile
