@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "style.h"
@@ -30,6 +30,8 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 #include "boxes/downloadpathbox.h"
 #include "boxes/usernamebox.h"
 #include "gui/filedialog.h"
+
+#include "localstorage.h"
 
 Slider::Slider(QWidget *parent, const style::slider &st, int32 count, int32 sel) : QWidget(parent),
 _count(count), _sel(snap(sel, 0, _count)), _wasSel(_sel), _st(st), _pressed(false) {
@@ -154,6 +156,12 @@ SettingsInner::SettingsInner(SettingsWidget *parent) : QWidget(parent),
 
 	_catsAndDogs(this, lang(lng_settings_cats_and_dogs), cCatsAndDogs()),
 
+	// local storage
+	_localImagesClear(this, lang(lng_local_images_clear)),
+	_imagesClearingWidth(st::linkFont->m.width(lang(lng_local_images_clearing))),
+	_imagesClearedWidth(st::linkFont->m.width(lang(lng_local_images_cleared))),
+	_imagesClearFailedWidth(st::linkFont->m.width(lang(lng_local_images_clear_failed))),
+
 	// advanced
 	_connectionType(this, lang(lng_connection_auto)),
 	_resetSessions(this, lang(lng_settings_reset)),
@@ -231,15 +239,23 @@ SettingsInner::SettingsInner(SettingsWidget *parent) : QWidget(parent),
 	case Window::TempDirExists: _tempDirClearState = TempDirExists; break;
 	case Window::TempDirRemoving: _tempDirClearState = TempDirClearing; break;
 	}
-	connect(App::wnd(), SIGNAL(tempDirCleared()), this, SLOT(onTempDirCleared()));
-	connect(App::wnd(), SIGNAL(tempDirClearFailed()), this, SLOT(onTempDirClearFailed()));
+	connect(App::wnd(), SIGNAL(tempDirCleared(int)), this, SLOT(onTempDirCleared(int)));
+	connect(App::wnd(), SIGNAL(tempDirClearFailed(int)), this, SLOT(onTempDirClearFailed(int)));
 
 	connect(&_catsAndDogs, SIGNAL(changed()), this, SLOT(onCatsAndDogs()));
+
+	// local storage
+	connect(&_localImagesClear, SIGNAL(clicked()), this, SLOT(onLocalImagesClear()));
+	switch (App::wnd()->localImagesState()) {
+	case Window::TempDirEmpty: _imagesClearState = TempDirEmpty; break;
+	case Window::TempDirExists: _imagesClearState = TempDirExists; break;
+	case Window::TempDirRemoving: _imagesClearState = TempDirClearing; break;
+	}
 
 	// advanced
 	connect(&_connectionType, SIGNAL(clicked()), this, SLOT(onConnectionType()));
 	connect(&_resetSessions, SIGNAL(clicked()), this, SLOT(onResetSessions()));
-	connect(&_logOut, SIGNAL(clicked()), this, SLOT(onLogout()));
+	connect(&_logOut, SIGNAL(clicked()), App::wnd(), SLOT(onLogout()));
 
 	_connectionTypeText = lang(lng_connection_type) + ' ';
 	_connectionTypeWidth = st::linkFont->m.width(_connectionTypeText);
@@ -456,14 +472,40 @@ void SettingsInner::paintEvent(QPaintEvent *e) {
 		top += st::setSectionSkip;
 
 		top += _catsAndDogs.height();
+
+		// local storage
+		p.setFont(st::setHeaderFont->f);
+		p.setPen(st::setHeaderColor->p);
+		p.drawText(_left + st::setHeaderLeft, top + st::setHeaderTop + st::setHeaderFont->ascent, lang(lng_settings_section_cache));
+		top += st::setHeaderSkip;
+
+		QString localImagesText = lang(lng_settings_no_images_cached);
+		int32 cnt = Local::hasImages();
+		if (cnt) {
+			localImagesText = lang((cnt > 1) ? lng_settings_images_cached : lng_settings_image_cached).replace(qsl("{count}"), QString::number(cnt)).replace(qsl("{size}"), formatSizeText(Local::storageFilesSize()));
+		}
+		p.setFont(st::linkFont->f);
+		p.setPen(st::black->p);
+		p.drawText(_left + st::setHeaderLeft, top + st::linkFont->ascent, localImagesText);
+		QString clearText;
+		int32 clearWidth = 0;
+		switch (_imagesClearState) {
+		case TempDirClearing: clearText = lang(lng_local_images_clearing); clearWidth = _imagesClearingWidth; break;
+		case TempDirCleared: clearText = lang(lng_local_images_cleared); clearWidth = _imagesClearedWidth; break;
+		case TempDirClearFailed: clearText = lang(lng_local_images_clear_failed); clearWidth = _imagesClearFailedWidth; break;
+		}
+		if (clearWidth) {
+			p.drawText(_left + st::setWidth - clearWidth, top + st::linkFont->ascent, clearText);
+		}
+		top += _localImagesClear.height();
 	}
-	
+
 	// advanced
 	p.setFont(st::setHeaderFont->f);
 	p.setPen(st::setHeaderColor->p);
 	p.drawText(_left + st::setHeaderLeft, top + st::setHeaderTop + st::setHeaderFont->ascent, lang(lng_settings_section_advanced));
 	top += st::setHeaderSkip;
-
+	
 	p.setFont(st::linkFont->f);
 	p.setPen(st::black->p);
 	p.drawText(_left + st::setHeaderLeft, _connectionType.y() + st::linkFont->ascent, _connectionTypeText);
@@ -541,6 +583,10 @@ void SettingsInner::resizeEvent(QResizeEvent *e) {
 		}
 		top += st::setSectionSkip;
 		_catsAndDogs.move(_left, top); top += _catsAndDogs.height();
+
+		// local storage
+		top += st::setHeaderSkip;
+		_localImagesClear.move(_left + st::setWidth - _localImagesClear.width(), top); top += _localImagesClear.height();
 	}
 
 	// advanced
@@ -754,6 +800,7 @@ void SettingsInner::showAll() {
 				_downloadPathClear.hide();
 			}
 		}
+
 	} else {
 		_replaceEmojis.hide();
 		_viewEmojis.hide();
@@ -763,6 +810,14 @@ void SettingsInner::showAll() {
 		_dontAskDownloadPath.hide();
 		_downloadPathEdit.hide();
 		_downloadPathClear.hide();
+		_localImagesClear.hide();
+	}
+
+	// local storage
+	if (self() && _imagesClearState == TempDirExists) {
+		_localImagesClear.show();
+	} else {
+		_localImagesClear.hide();
 	}
 
 	// advanced
@@ -821,10 +876,6 @@ void SettingsInner::onUpdatePhoto() {
 	PhotoCropBox *box = new PhotoCropBox(img, self()->id);
 	connect(box, SIGNAL(closed()), this, SLOT(onPhotoUpdateStart()));
 	App::wnd()->showLayer(box);
-}
-
-void SettingsInner::onLogout() {
-	App::logOut();
 }
 
 void SettingsInner::onResetSessions() {
@@ -1107,20 +1158,35 @@ void SettingsInner::onDownloadPathClear() {
 
 void SettingsInner::onDownloadPathClearSure() {
 	App::wnd()->hideLayer();
-	App::wnd()->tempDirDelete();
+	App::wnd()->tempDirDelete(Local::ClearManagerDownloads);
 	_tempDirClearState = TempDirClearing;
 	showAll();
 	update();
 }
 
-void SettingsInner::onTempDirCleared() {
-	_tempDirClearState = TempDirCleared;
+void SettingsInner::onLocalImagesClear() {
+	App::wnd()->tempDirDelete(Local::ClearManagerImages);
+	_imagesClearState = TempDirClearing;
 	showAll();
 	update();
 }
 
-void SettingsInner::onTempDirClearFailed() {
-	_tempDirClearState = TempDirClearFailed;
+void SettingsInner::onTempDirCleared(int task) {
+	if (task & Local::ClearManagerDownloads) {
+		_tempDirClearState = TempDirCleared;
+	} else if (task & Local::ClearManagerImages) {
+		_imagesClearState = TempDirCleared;
+	}
+	showAll();
+	update();
+}
+
+void SettingsInner::onTempDirClearFailed(int task) {
+	if (task & Local::ClearManagerDownloads) {
+		_tempDirClearState = TempDirClearFailed;
+	} else if (task & Local::ClearManagerImages) {
+		_imagesClearState = TempDirClearFailed;
+	}
 	showAll();
 	update();
 }

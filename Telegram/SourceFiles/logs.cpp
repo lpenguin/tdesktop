@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include <iostream>
@@ -73,7 +73,7 @@ void debugLogWrite(const char *file, int32 line, const QString &v) {
 		(*debugLogStream) << msg;
 		debugLogStream->flush();
 #ifdef Q_OS_WIN
-		OutputDebugString(reinterpret_cast<const wchar_t *>(msg.utf16()));
+//		OutputDebugString(reinterpret_cast<const wchar_t *>(msg.utf16()));
 #elif defined Q_OS_MAC
         objc_outputDebugString(msg);
 #elif defined Q_OS_LINUX && defined _DEBUG
@@ -211,6 +211,7 @@ void logsInit() {
         cForceWorkingDir(rightDir);
 	}
 	cForceWorkingDir(QDir(cWorkingDir()).absolutePath() + '/');
+
 #ifdef Q_OS_WIN
 	if (cWorkingDir() == psAppDataPath()) { // fix old "Telegram Win (Unofficial)" version
 		moveOldDataFiles(psAppDataPathOld());

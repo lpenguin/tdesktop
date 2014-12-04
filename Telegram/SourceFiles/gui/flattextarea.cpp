@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,17 +13,18 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "style.h"
 
 #include "flattextarea.h"
+#include "window.h"
 
 FlatTextarea::FlatTextarea(QWidget *parent, const style::flatTextarea &st, const QString &pholder, const QString &v) : QTextEdit(v, parent),
 	_ph(pholder), _oldtext(v), _phVisible(!v.length()),
     a_phLeft(_phVisible ? 0 : st.phShift), a_phAlpha(_phVisible ? 1 : 0), a_phColor(st.phColor->c),
-    _st(st), _fakeMargin(0),
+    _st(st), _undoAvailable(false), _redoAvailable(false), _fakeMargin(0),
     _touchPress(false), _touchRightButton(false), _touchMove(false), _replacingEmojis(false) {
 	setAcceptRichText(false);
 	resize(_st.width, _st.font->height);
@@ -58,6 +59,9 @@ FlatTextarea::FlatTextarea(QWidget *parent, const style::flatTextarea &st, const
 
 	connect(document(), SIGNAL(contentsChange(int, int, int)), this, SLOT(onDocumentContentsChange(int, int, int)));
 	connect(document(), SIGNAL(contentsChanged()), this, SLOT(onDocumentContentsChanged()));
+	connect(this, SIGNAL(undoAvailable(bool)), this, SLOT(onUndoAvailable(bool)));
+	connect(this, SIGNAL(redoAvailable(bool)), this, SLOT(onRedoAvailable(bool)));
+	if (App::wnd()) connect(this, SIGNAL(selectionChanged()), App::wnd(), SLOT(updateGlobalMenu()));
 }
 
 void FlatTextarea::onTouchTimer() {
@@ -223,7 +227,7 @@ QString FlatTextarea::getText(int32 start, int32 end) const {
 							uint32 index = imageName.mid(8).toUInt(0, 16);
 							const EmojiData *emoji = getEmoji(index);
 							if (emoji) {
-								emojiText.reserve(emoji->len);
+								emojiText.reserve(emoji->len + (emoji->postfix ? 1 : 0));
 								switch (emoji->len) {
 								case 1: emojiText.append(QChar(emoji->code & 0xFFFF)); break;
 								case 2:
@@ -237,6 +241,7 @@ QString FlatTextarea::getText(int32 start, int32 end) const {
 									emojiText.append(QChar(emoji->code2 & 0xFFFF));
 								break;
 								}
+								if (emoji->postfix) emojiText.append(QChar(emoji->postfix));
 							}
 						}
 					}
@@ -268,6 +273,14 @@ bool FlatTextarea::hasText() const {
 	return (from.next() != till);
 }
 
+bool FlatTextarea::isUndoAvailable() const {
+	return _undoAvailable;
+}
+
+bool FlatTextarea::isRedoAvailable() const {
+	return _redoAvailable;
+}
+
 void FlatTextarea::insertEmoji(EmojiPtr emoji, QTextCursor c) {
 	c.removeSelectedText();
 
@@ -283,7 +296,7 @@ void FlatTextarea::insertEmoji(EmojiPtr emoji, QTextCursor c) {
 }
 
 void FlatTextarea::processDocumentContentsChange(int position, int charsAdded) {
-	int32 emojiPosition = 0;
+	int32 emojiPosition = 0, emojiLen = 0;
 	const EmojiData *emoji = 0;
 
 	QTextDocument *doc(document());
@@ -305,13 +318,14 @@ void FlatTextarea::processDocumentContentsChange(int position, int charsAdded) {
 
 				QString t(fragment.text());
 				for (const QChar *ch = t.constData(), *e = ch + t.size(); ch != e; ++ch) {
-					if (ch + 1 < e && (ch->isHighSurrogate() || (((ch->unicode() >= 48 && ch->unicode() < 58) || ch->unicode() == 35) && (ch + 1)->unicode() == 0x20E3) || (ch + 1)->unicode() == 0xFE0F)) {
+					if (ch + 1 < e && (ch->isHighSurrogate() || (((ch->unicode() >= 48 && ch->unicode() < 58) || ch->unicode() == 35) && (ch + 1)->unicode() == 0x20E3))) {
 						emoji = getEmoji((ch->unicode() << 16) | (ch + 1)->unicode());
 						if (emoji) {
 							if (emoji->len == 4 && (ch + 3 >= e || ((uint32((ch + 2)->unicode()) << 16) | uint32((ch + 3)->unicode())) != emoji->code2)) {
 								emoji = 0;
 							} else {
 								emojiPosition = p + (ch - t.constData());
+								emojiLen = emoji->len + ((ch + emoji->len < e && (ch + emoji->len)->unicode() == 0xFE0F) ? 1 : 0);
 								break;
 							}
 						}
@@ -320,6 +334,7 @@ void FlatTextarea::processDocumentContentsChange(int position, int charsAdded) {
 						emoji = getEmoji(ch->unicode());
 						if (emoji) {
 							emojiPosition = p + (ch - t.constData());
+							emojiLen = emoji->len + ((ch + emoji->len < e && (ch + emoji->len)->unicode() == 0xFE0F) ? 1 : 0);
 							break;
 						}
 					}
@@ -330,7 +345,7 @@ void FlatTextarea::processDocumentContentsChange(int position, int charsAdded) {
 		}
 		if (emoji) {
 			QTextCursor c(doc->docHandle(), emojiPosition);
-			c.setPosition(emojiPosition + emoji->len, QTextCursor::KeepAnchor);
+			c.setPosition(emojiPosition + emojiLen, QTextCursor::KeepAnchor);
 			int32 removedUpto = c.position();
 
 			insertEmoji(emoji, c);
@@ -398,6 +413,17 @@ void FlatTextarea::onDocumentContentsChanged() {
 		emit changed();
 	}
 	updatePlaceholder();
+	if (App::wnd()) App::wnd()->updateGlobalMenu();
+}
+
+void FlatTextarea::onUndoAvailable(bool avail) {
+	_undoAvailable = avail;
+	if (App::wnd()) App::wnd()->updateGlobalMenu();
+}
+
+void FlatTextarea::onRedoAvailable(bool avail) {
+	_redoAvailable = avail;
+	if (App::wnd()) App::wnd()->updateGlobalMenu();
 }
 
 bool FlatTextarea::animStep(float64 ms) {

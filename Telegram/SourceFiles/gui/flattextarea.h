@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -51,12 +51,18 @@ public:
 	QString getText(int32 start = 0, int32 end = -1) const;
 	bool hasText() const;
 
+	bool isUndoAvailable() const;
+	bool isRedoAvailable() const;
+
 public slots:
 
 	void onTouchTimer();
 
 	void onDocumentContentsChange(int position, int charsRemoved, int charsAdded);
 	void onDocumentContentsChanged();
+
+	void onUndoAvailable(bool avail);
+	void onRedoAvailable(bool avail);
 
 signals:
 
@@ -81,6 +87,8 @@ private:
 	anim::fvalue a_phAlpha;
 	anim::cvalue a_phColor;
 	style::flatTextarea _st;
+
+	bool _undoAvailable, _redoAvailable;
 
 	int32 _fakeMargin;
 

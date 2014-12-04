@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "style.h"
@@ -143,7 +143,7 @@ void TopBarWidget::enableShadow(bool enable) {
 
 void TopBarWidget::paintEvent(QPaintEvent *e) {
 	QPainter p(this);
-	if (e->rect().top() < st::topBarHeight) {
+	if (e->rect().top() < st::topBarHeight) { // optimize shadow-only drawing
 		p.fillRect(QRect(0, 0, width(), st::topBarHeight), st::topBarBG->b);
 		if (_clearSelection.isHidden()) {
 			p.save();
@@ -154,8 +154,6 @@ void TopBarWidget::paintEvent(QPaintEvent *e) {
 			p.setPen(st::btnDefLink.color->p);
 			p.drawText(st::topBarSelectedPos.x(), st::topBarSelectedPos.y() + st::linkFont->ascent, _selStr);
 		}
-	} else {
-		int a = 0; // optimize shadow-only drawing
 	}
 	if (_drawShadow) {
 		p.fillRect(st::titleShadow, st::topBarHeight, width() - st::titleShadow, st::titleShadow, st::titleShadowColor->b);
@@ -291,6 +289,7 @@ updPts(0), updDate(0), updQts(-1), updSeq(0), updInited(false), onlineRequest(0)
 	connect(&_topBar, SIGNAL(clicked()), this, SLOT(onTopBarClick()));
 	connect(&history, SIGNAL(peerShown(PeerData*)), this, SLOT(onPeerShown(PeerData*)));
 	connect(&updateNotifySettingTimer, SIGNAL(timeout()), this, SLOT(onUpdateNotifySettings()));
+	connect(this, SIGNAL(showPeerAsync(quint64,qint32,bool,bool)), this, SLOT(showPeer(quint64,qint32,bool,bool)), Qt::QueuedConnection);
 	if (audioVoice()) {
 		connect(audioVoice(), SIGNAL(updated(AudioData*)), this, SLOT(audioPlayProgress(AudioData*)));
 		connect(audioVoice(), SIGNAL(stopped(AudioData*)), this, SLOT(audioPlayProgress(AudioData*)));
@@ -766,10 +765,17 @@ void MainWidget::peerUsernameChanged(PeerData *peer) {
 
 void MainWidget::checkLastUpdate(bool afterSleep) {
 	uint64 n = getms(true);
-	LOG(("Checking last update!.. last update %1, now %2, noUpdatesTimer %3, remains %4").arg(_lastUpdateTime).arg(n).arg(noUpdatesTimer.isActive() ? 1 : 0).arg(noUpdatesTimer.remainingTime()));
 	if (_lastUpdateTime && n > _lastUpdateTime + (afterSleep ? NoUpdatesAfterSleepTimeout : NoUpdatesTimeout)) {
 		getDifference();
 	}
+}
+
+void MainWidget::showAddContact() {
+	dialogs.onAddContact();
+}
+
+void MainWidget::showNewGroup() {
+	dialogs.onNewGroup();
 }
 
 void MainWidget::photosLoaded(History *h, const MTPmessages_Messages &msgs, mtpRequestId req) {
@@ -1044,7 +1050,7 @@ void MainWidget::createDialogAtTop(History *history, int32 unreadCount) {
 	dialogs.createDialogAtTop(history, unreadCount);
 }
 
-void MainWidget::showPeer(const PeerId &peerId, MsgId msgId, bool back, bool force) {
+void MainWidget::showPeer(quint64 peerId, qint32 msgId, bool back, bool force) {
 	if (!back && _stack.size() == 1 && _stack[0]->type() == HistoryStackItem && _stack[0]->peer->id == peerId) {
 		back = true;
 	}
@@ -1731,7 +1737,6 @@ void MainWidget::gotState(const MTPupdates_State &state) {
 	MTP::setGlobalDoneHandler(rpcDone(&MainWidget::updateReceived));
 	_lastUpdateTime = getms(true);
 	noUpdatesTimer.start(NoUpdatesTimeout);
-	LOG(("Started no updates timeout, %1").arg(_lastUpdateTime));
 	updInited = true;
 
 	dialogs.loadDialogs();
@@ -1749,7 +1754,7 @@ void MainWidget::gotDifference(const MTPupdates_Difference &diff) {
 		MTP::setGlobalDoneHandler(rpcDone(&MainWidget::updateReceived));
 		_lastUpdateTime = getms(true);
 		noUpdatesTimer.start(NoUpdatesTimeout);
-		LOG(("Started no updates timeout, %1").arg(_lastUpdateTime));
+
 		updInited = true;
 	} break;
 	case mtpc_updates_differenceSlice: {
@@ -1831,6 +1836,30 @@ void MainWidget::start(const MTPUser &user) {
 	App::app()->startUpdateCheck();
 	MTP::send(MTPupdates_GetState(), rpcDone(&MainWidget::gotState));
 	update();
+	if (!cStartUrl().isEmpty()) {
+		openLocalUrl(cStartUrl());
+		cSetStartUrl(QString());
+	}
+}
+
+void MainWidget::openLocalUrl(const QString &url) {
+	QRegularExpressionMatch m = QRegularExpression(qsl("^tg://resolve/?\\?domain=([a-zA-Z0-9\\.\\_]+)$"), QRegularExpression::CaseInsensitiveOption).match(url.trimmed());
+	if (m.hasMatch()) {
+		openUserByName(m.captured(1));
+	}
+}
+
+void MainWidget::openUserByName(const QString &username) {
+	UserData *user = App::userByName(username);
+	if (user) {
+		emit showPeerAsync(user->id, 0, false, true);
+	} else {
+		MTP::send(MTPcontacts_ResolveUsername(MTP_string(username)), rpcDone(&MainWidget::usernameResolveDone));
+	}
+}
+
+void MainWidget::usernameResolveDone(const MTPUser &user) {
+	showPeer(App::feedUsers(MTP_vector<MTPUser>(1, user))->id, 0, false, true);
 }
 
 void MainWidget::startFull(const MTPVector<MTPUser> &users) {
@@ -1997,6 +2026,8 @@ int32 MainWidget::dlgsWidth() const {
 }
 
 MainWidget::~MainWidget() {
+	if (App::main() == this) history.showPeer(0, 0, true);
+
 	delete hider;
 	MTP::clearGlobalHandlers();
 	App::deinitMedia(false);
@@ -2040,7 +2071,6 @@ void MainWidget::updateReceived(const mtpPrime *from, const mtpPrime *end) {
 
 			_lastUpdateTime = getms(true);
 			noUpdatesTimer.start(NoUpdatesTimeout);
-			LOG(("Started no updates timeout, %1").arg(_lastUpdateTime));
 
 			handleUpdates(updates);
 		} catch(mtpErrorUnexpected &e) { // just some other type
@@ -2321,12 +2351,34 @@ void MainWidget::feedUpdate(const MTPUpdate &update) {
 		App::feedUserLink(d.vuser_id, d.vmy_link, d.vforeign_link);
 	} break;
 
+	case mtpc_updateNotifySettings: {
+		const MTPDupdateNotifySettings &d(update.c_updateNotifySettings());
+		applyNotifySetting(d.vpeer, d.vnotify_settings);
+	} break;
+
+	case mtpc_updateDcOptions: {
+		const MTPDupdateDcOptions &d(update.c_updateDcOptions());
+		MTP::updateDcOptions(d.vdc_options.c_vector().v);
+	} break;
+
+	case mtpc_updateUserPhone: {
+		const MTPDupdateUserPhone &d(update.c_updateUserPhone());
+		UserData *user = App::userLoaded(d.vuser_id.v);
+		if (user) {
+			user->setPhone(qs(d.vphone));
+			user->setName(user->firstName, user->lastName, (user->contact || isServiceUser(user->id) || user->phone.isEmpty()) ? QString() : App::formatPhone(user->phone), user->username);
+			if (App::main()) App::main()->peerUpdated(user);
+		}
+	} break;
+
 	case mtpc_updateActivation: {
 		const MTPDupdateActivation &d(update.c_updateActivation());
 	} break;
 
-	case mtpc_updateNewAuthorization: {
-		const MTPDupdateNewAuthorization &d(update.c_updateNewAuthorization());
+	case mtpc_updateNewGeoChatMessage: {
+		const MTPDupdateNewGeoChatMessage &d(update.c_updateNewGeoChatMessage());
+//		PeerId peer = App::histories().addToBack(d.vmessage);
+//		history.peerMessagesUpdated(peer);
 	} break;
 
 	case mtpc_updateNewEncryptedMessage: {
@@ -2346,30 +2398,20 @@ void MainWidget::feedUpdate(const MTPUpdate &update) {
 		const MTPDupdateEncryptedMessagesRead &d(update.c_updateEncryptedMessagesRead());
 	} break;
 
-	case mtpc_updateNewGeoChatMessage: {
-		const MTPDupdateNewGeoChatMessage &d(update.c_updateNewGeoChatMessage());
-//		PeerId peer = App::histories().addToBack(d.vmessage);
-//		history.peerMessagesUpdated(peer);
-	} break;
-
 	case mtpc_updateUserBlocked: {
 		const MTPDupdateUserBlocked &d(update.c_updateUserBlocked());
-		//
 	} break;
 
-	case mtpc_updateNotifySettings: {
-		const MTPDupdateNotifySettings &d(update.c_updateNotifySettings());
-		applyNotifySetting(d.vpeer, d.vnotify_settings);
-	} break;
-
-	case mtpc_updateDcOptions: {
-		const MTPDupdateDcOptions &d(update.c_updateDcOptions());
-		MTP::updateDcOptions(d.vdc_options.c_vector().v);
+	case mtpc_updateNewAuthorization: {
+		const MTPDupdateNewAuthorization &d(update.c_updateNewAuthorization());
 	} break;
 
 	case mtpc_updateServiceNotification: {
 		const MTPDupdateServiceNotification &d(update.c_updateServiceNotification());
-		//
+	} break;
+
+	case mtpc_updatePrivacy: {
+		const MTPDupdatePrivacy &d(update.c_updatePrivacy());
 	} break;
 	}
 }

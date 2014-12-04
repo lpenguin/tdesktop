@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
  
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
  
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 #include "launcher_lib.h"
@@ -89,7 +89,7 @@ protected:
 	bool posInited;
     QSystemTrayIcon *trayIcon;
     QMenu *trayIconMenu;
-    QImage icon256;
+    QImage icon256, iconbig256;
 	QIcon wndIcon;
 
 	virtual void setupTrayIcon() = 0;
@@ -170,6 +170,7 @@ QString psCurrentLanguage();
 QString psAppDataPath();
 QString psDownloadPath();
 QString psCurrentExeDirectory(int argc, char *argv[]);
+QString psCurrentExeName(int argc, char *argv[]);
 void psAutoStart(bool start, bool silent = false);
 void psSendToMenu(bool send, bool silent = false);
 
@@ -189,6 +190,8 @@ void psOpenFile(const QString &name, bool openWith = false);
 void psShowInFolder(const QString &name);
 void psStart();
 void psFinish();
+
+void psRegisterCustomScheme();
 
 void psUpdateOverlayed(QWidget *widget);
 inline QString psConvertFileUrl(const QString &url) {

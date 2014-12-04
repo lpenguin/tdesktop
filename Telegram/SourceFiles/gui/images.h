@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -52,6 +52,13 @@ public:
 	
 	void forget() const;
 	void restore() const;
+
+	QByteArray savedFormat() const {
+		return format;
+	}
+	QByteArray savedData() const {
+		return saved;
+	}
 
 	virtual ~Image() {
 		invalidateSizeCache();
@@ -106,6 +113,24 @@ private:
 LocalImage *getImage(const QString &file);
 LocalImage *getImage(const QPixmap &pixmap, QByteArray format);
 
+typedef QPair<uint64, uint64> StorageKey;
+inline uint64 storageMix32To64(int32 a, int32 b) {
+	return (uint64(*reinterpret_cast<uint32*>(&a)) << 32) | uint64(*reinterpret_cast<uint32*>(&b));
+}
+inline StorageKey storageKey(int32 dc, const int64 &volume, int32 local) {
+	return StorageKey(storageMix32To64(dc, local), volume);
+}
+inline StorageKey storageKey(const MTPDfileLocation &location) {
+	return storageKey(location.vdc_id.v, location.vvolume_id.v, location.vlocal_id.v);
+}
+struct StorageImageSaved {
+	StorageImageSaved() : type(mtpc_storage_fileUnknown) {
+	}
+	StorageImageSaved(mtpTypeId type, const QByteArray &data) : type(type), data(data) {
+	}
+	mtpTypeId type;
+	QByteArray data;
+};
 class StorageImage : public Image {
 public:
 
@@ -123,7 +148,7 @@ public:
 	void load(bool loadFirst = false, bool prior = true) {
 		if (loader) {
 			loader->start(loadFirst, prior);
-			check();
+			if (loader) check();
 		}
 	}
 	void checkload() const {
@@ -131,7 +156,7 @@ public:
 			if (!loader->loading()) {
 				loader->start(true);
 			}
-			check();
+			if (loader) check();
 		}
 	}
 

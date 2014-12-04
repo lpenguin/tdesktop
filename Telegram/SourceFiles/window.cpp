@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "style.h"
@@ -28,8 +28,10 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 #include "mainwidget.h"
 #include "layerwidget.h"
 #include "settingswidget.h"
+#include "boxes/confirmbox.h"
 
 #include "mediaview.h"
+#include "localstorage.h"
 
 ConnectingWidget::ConnectingWidget(QWidget *parent, const QString &text, const QString &reconnect) : QWidget(parent), _shadow(st::boxShadow), _reconnect(this, QString()) {
 	set(text, reconnect);
@@ -65,20 +67,6 @@ void ConnectingWidget::onReconnect() {
 	MTP::restart();
 }
 
-TempDirDeleter::TempDirDeleter(QThread *thread) {
-	moveToThread(thread);
-	connect(thread, SIGNAL(started()), this, SLOT(onStart()));
-}
-
-void TempDirDeleter::onStart() {
-	if (QDir(cTempDir()).removeRecursively()) {
-		emit succeed();
-	} else {
-		emit failed();
-	}
-}
-
-
 NotifyWindow::NotifyWindow(HistoryItem *msg, int32 x, int32 y) : history(msg->history()), item(msg)
 #ifdef Q_OS_WIN
 , started(GetTickCount())
@@ -100,7 +88,7 @@ NotifyWindow::NotifyWindow(HistoryItem *msg, int32 x, int32 y) : history(msg->hi
 	inputTimer.setSingleShot(true);
 	connect(&inputTimer, SIGNAL(timeout()), this, SLOT(checkLastInput()));
 
-	connect(&close, SIGNAL(clicked()), this, SLOT(unlinkHistory()));
+	connect(&close, SIGNAL(clicked()), this, SLOT(unlinkHistoryAndNotify()));
 	close.setAcceptBoth(true);
 	close.move(st::notifyWidth - st::notifyClose.width - st::notifyClosePos.x(), st::notifyClosePos.y());
 	close.show();
@@ -240,8 +228,13 @@ void NotifyWindow::updatePeerPhoto() {
 
 void NotifyWindow::itemRemoved(HistoryItem *del) {
 	if (item == del) {
-		unlinkHistory();
+		unlinkHistoryAndNotify();
 	}
+}
+
+void NotifyWindow::unlinkHistoryAndNotify() {
+	unlinkHistory();
+	App::wnd()->notifyShowNext();
 }
 
 void NotifyWindow::unlinkHistory(History *hist) {
@@ -249,7 +242,6 @@ void NotifyWindow::unlinkHistory(History *hist) {
 		animHide(st::notifyFastAnim, st::notifyFastAnimFunc);
 		history = 0;
 		item = 0;
-		App::wnd()->notifyShowNext();
 	}
 }
 
@@ -269,12 +261,14 @@ void NotifyWindow::startHiding() {
 
 void NotifyWindow::mousePressEvent(QMouseEvent *e) {
 	if (!history) return;
+	PeerId peer = history->peer->id;
+
 	if (e->button() == Qt::RightButton) {
-		unlinkHistory();
+		unlinkHistoryAndNotify();
 	} else if (history) {
 		App::wnd()->showFromTray();
 		App::wnd()->hideSettings();
-        App::main()->showPeer(history->peer->id, 0, false, true);
+		App::main()->showPeer(peer, 0, false, true);
 		e->ignore();
 	}
 }
@@ -337,11 +331,14 @@ NotifyWindow::~NotifyWindow() {
 
 Window::Window(QWidget *parent) : PsMainWindow(parent),
 intro(0), main(0), settings(0), layerBG(0), _topWidget(0),
-_connecting(0), _tempDeleter(0), _tempDeleterThread(0), dragging(false), _inactivePress(false), _mediaView(0) {
+_connecting(0), _clearManager(0), dragging(false), _inactivePress(false), _mediaView(0) {
 
 	icon16 = icon256.scaledToWidth(16, Qt::SmoothTransformation);
 	icon32 = icon256.scaledToWidth(32, Qt::SmoothTransformation);
 	icon64 = icon256.scaledToWidth(64, Qt::SmoothTransformation);
+	iconbig16 = iconbig256.scaledToWidth(16, Qt::SmoothTransformation);
+	iconbig32 = iconbig256.scaledToWidth(32, Qt::SmoothTransformation);
+	iconbig64 = iconbig256.scaledToWidth(64, Qt::SmoothTransformation);
 
 	if (objectName().isEmpty()) {
 		setObjectName(qsl("MainWindow"));
@@ -440,6 +437,7 @@ void Window::clearWidgets() {
 }
 
 void Window::setupIntro(bool anim) {
+	cSetContactsReceived(false);
 	if (intro && (intro->animating() || intro->isVisible()) && !main) return;
 
 	QPixmap bg = myGrab(this, QRect(0, st::titleHeight, width(), height() - st::titleHeight));
@@ -480,6 +478,8 @@ void Window::setupMain(bool anim) {
 }
 
 void Window::showSettings() {
+	if (isHidden()) showFromTray();
+
 	App::wnd()->hideLayer();
 	if (settings) {
 		return hideSettings();
@@ -640,6 +640,13 @@ void Window::hideLayer() {
 	}
 }
 
+bool Window::hideInnerLayer() {
+	if (layerBG) {
+		return layerBG->onInnerClose();
+	}
+	return true;
+}
+
 bool Window::layerShown() {
 	return !!layerBG || !!_topWidget;
 }
@@ -727,6 +734,15 @@ QRect Window::iconRect() const {
 bool Window::eventFilter(QObject *obj, QEvent *evt) {
 	if (obj == App::app() && (evt->type() == QEvent::ApplicationActivate)) {
         QTimer::singleShot(1, this, SLOT(checkHistoryActivation()));
+	} else if (obj == App::app() && (evt->type() == QEvent::FileOpen)) {
+		QString url = static_cast<QFileOpenEvent*>(evt)->url().toEncoded();
+		if (!url.trimmed().midRef(0, 5).compare(qsl("tg://"), Qt::CaseInsensitive)) {
+			cSetStartUrl(url);
+			if (!cStartUrl().isEmpty() && App::main() && App::self()) {
+				App::main()->openLocalUrl(cStartUrl());
+				cSetStartUrl(QString());
+			}
+		}
 	} else if (obj == this && evt->type() == QEvent::WindowStateChange) {
 		Qt::WindowState state = (windowState() & Qt::WindowMinimized) ? Qt::WindowMinimized : ((windowState() & Qt::WindowMaximized) ? Qt::WindowMaximized : ((windowState() & Qt::WindowFullScreen) ? Qt::WindowFullScreen : Qt::WindowNoState));
 		psStateChanged(state);
@@ -770,6 +786,7 @@ bool Window::minimizeToTray() {
 	}
 	if (App::main()) App::main()->setOnline(windowState());
 	updateTrayMenu();
+	updateGlobalMenu();
 	return true;
 }
 
@@ -810,6 +827,36 @@ void Window::updateTrayMenu(bool force) {
 	if (trayIcon) {
 		trayIcon->setContextMenu((active || cPlatform() != dbipMac) ? trayIconMenu : 0);
 	}
+#endif
+}
+
+void Window::onShowAddContact() {
+	if (isHidden()) showFromTray();
+
+	if (main) main->showAddContact();
+}
+
+void Window::onShowNewGroup() {
+	if (isHidden()) showFromTray();
+
+	if (main) main->showNewGroup();
+}
+
+void Window::onLogout() {
+	if (isHidden()) showFromTray();
+
+	ConfirmBox *box = new ConfirmBox(lang(lng_sure_logout));
+	connect(box, SIGNAL(confirmed()), this, SLOT(onLogoutSure()));
+	App::wnd()->showLayer(box);
+}
+
+void Window::onLogoutSure() {
+	App::logOut();
+}
+
+void Window::updateGlobalMenu() {
+#ifdef Q_OS_MAC
+	psMacUpdateMenu();
 #endif
 }
 
@@ -878,6 +925,7 @@ void Window::showFromTray(QSystemTrayIcon::ActivationReason reason) {
 		psUpdateCounter();
 		if (App::main()) App::main()->setOnline(windowState());
 		QTimer::singleShot(1, this, SLOT(updateTrayMenu()));
+		QTimer::singleShot(1, this, SLOT(updateGlobalMenu()));
 	}
 }
 
@@ -915,40 +963,56 @@ void Window::resizeEvent(QResizeEvent *e) {
 }
 
 Window::TempDirState Window::tempDirState() {
-	if (_tempDeleter) {
+	if (_clearManager && _clearManager->hasTask(Local::ClearManagerDownloads)) {
 		return TempDirRemoving;
 	}
 	return QDir(cTempDir()).exists() ? TempDirExists : TempDirEmpty;
 }
 
-void Window::tempDirDelete() {
-	if (_tempDeleter) return;
-	_tempDeleterThread = new QThread();
-	_tempDeleter = new TempDirDeleter(_tempDeleterThread);
-	connect(_tempDeleter, SIGNAL(succeed()), this, SLOT(onTempDirCleared()));
-	connect(_tempDeleter, SIGNAL(failed()), this, SLOT(onTempDirClearFailed()));
-	_tempDeleterThread->start();
+Window::TempDirState Window::localImagesState() {
+	if (_clearManager && _clearManager->hasTask(Local::ClearManagerImages)) {
+		return TempDirRemoving;
+	}
+	return Local::hasImages() ? TempDirExists : TempDirEmpty;
 }
 
-void Window::onTempDirCleared() {
-	_tempDeleter->deleteLater();
-	_tempDeleter = 0;
-	_tempDeleterThread->deleteLater();
-	_tempDeleterThread = 0;
-	emit tempDirCleared();
+void Window::tempDirDelete(int task) {
+	if (_clearManager) {
+		if (_clearManager->addTask(task)) {
+			return;
+		} else {
+			_clearManager->deleteLater();
+			_clearManager = 0;
+		}
+	}
+	_clearManager = new Local::ClearManager();
+	_clearManager->addTask(task);
+	connect(_clearManager, SIGNAL(succeed(int,void*)), this, SLOT(onClearFinished(int,void*)));
+	connect(_clearManager, SIGNAL(failed(int,void*)), this, SLOT(onClearFailed(int,void*)));
+	_clearManager->start();
 }
 
-void Window::onTempDirClearFailed() {
-	_tempDeleter->deleteLater();
-	_tempDeleter = 0;
-	_tempDeleterThread->deleteLater();
-	_tempDeleterThread = 0;
-	emit tempDirClearFailed();
+void Window::onClearFinished(int task, void *manager) {
+	if (manager && manager == _clearManager) {
+		_clearManager->deleteLater();
+		_clearManager = 0;
+	}
+	emit tempDirCleared(task);
+}
+
+void Window::onClearFailed(int task, void *manager) {
+	if (manager && manager == _clearManager) {
+		_clearManager->deleteLater();
+		_clearManager = 0;
+	}
+	emit tempDirClearFailed(task);
 }
 
 void Window::quit() {
 	delete _mediaView;
 	_mediaView = 0;
+	delete main;
+	main = 0;
 	notifyClearFast();
 }
 
@@ -1013,6 +1077,7 @@ void Window::notifyClear(History *history) {
 	psClearNotifies(history->peer->id);
 	notifyWhenMaps.remove(history);
 	notifyWhenAlerts.remove(history);
+	notifyShowNext();
 }
 
 void Window::notifyClearFast() {
@@ -1245,7 +1310,7 @@ void Window::notifyActivateAll() {
 }
 
 QImage Window::iconLarge() const {
-	return icon256;
+	return iconbig256;
 }
 
 void Window::placeSmallCounter(QImage &img, int size, int count, style::color bg, const QPoint &shift, style::color color) {
@@ -1336,7 +1401,7 @@ QImage Window::iconWithCounter(int size, int count, style::color bg, bool smallI
 		if (size != 16 && size != 32) size = 64;
 	}
 
-	QImage img((size == 16) ? icon16 : (size == 32 ? icon32 : icon64));
+	QImage img(smallIcon ? ((size == 16) ? iconbig16 : (size == 32 ? iconbig32 : iconbig64)) : ((size == 16) ? icon16 : (size == 32 ? icon32 : icon64)));
 	if (!count) return img;
 
 	if (smallIcon) {
@@ -1376,8 +1441,7 @@ void Window::changingMsgId(HistoryItem *row, MsgId newId) {
 
 Window::~Window() {
     notifyClearFast();
-	delete _tempDeleter;
-	delete _tempDeleterThread;
+	delete _clearManager;
 	delete _connecting;
 	delete _mediaView;
 	delete trayIcon;

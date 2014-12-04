@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -101,45 +101,19 @@ inline void mylocaltime(struct tm * _Tm, const time_t * _Time) {
 bool checkms(); // returns true if time has changed
 uint64 getms(bool checked = false);
 
-class SingleTimer;
-void regSingleTimer(SingleTimer *timer);
-void unregSingleTimer(SingleTimer *timer);
-void adjustSingleTimers();
-
 class SingleTimer : public QTimer { // single shot timer with check
 	Q_OBJECT
 	
 public:
 
-	SingleTimer() : _finishing(0) {
-		QTimer::setSingleShot(true);
-		connect(this, SIGNAL(callAdjust()), this, SLOT(adjust()));
-		connect(this, SIGNAL(timeout()), this, SLOT(unreg()));
-	}
-
-	void start(int msec) {
-		_finishing = getms(true) + (msec < 0 ? 0 : uint64(msec));
-		QTimer::start(msec);
-		regSingleTimer(this);
-	}
-	void stop() {
-		QTimer::stop();
-		unreg();
-	}
+	SingleTimer();
 
 	void setSingleShot(bool); // is not available
 	void start(); // is not available
 
-	~SingleTimer() {
-		unreg();
-	}
-
-signals:
-
-	void callAdjust();
-
 public slots:
 
+	void start(int msec);
 	void adjust() {
 		uint64 n = getms(true);
 		if (isActive()) {
@@ -150,12 +124,10 @@ public slots:
 			}
 		}
 	}
-	void unreg() {
-		unregSingleTimer(this);
-	}
 
 private:
 	uint64 _finishing;
+	bool _inited;
 
 };
 
@@ -369,3 +341,12 @@ typedef enum {
 	HitTestLeft,
 	HitTestTopLeft,
 } HitTestType;
+
+inline QString strMakeFromLetters(const uint32 *letters, int32 len) {
+	QString result;
+	result.reserve(len);
+	for (int32 i = 0; i < len; ++i) {
+		result.push_back(QChar((((letters[i] << 16) & 0xFF) >> 8) | (letters[i] & 0xFF)));
+	}
+	return result;
+}

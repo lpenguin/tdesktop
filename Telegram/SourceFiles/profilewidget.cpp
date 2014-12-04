@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 
@@ -340,13 +340,13 @@ void ProfileInner::reorderParticipants() {
 		UserData *self = App::self();
 		for (ChatData::Participants::const_iterator i = _peerChat->participants.cbegin(), e = _peerChat->participants.cend(); i != e; ++i) {
 			UserData *user = i.key();
-			int32 until = user->onlineTill;
+			int32 until = App::onlineForSort(user->onlineTill, t);
 			Participants::iterator before = _participants.begin();
 			if (user != self) {
 				if (before != _participants.end() && (*before) == self) {
 					++before;
 				}
-				while (before != _participants.end() && (*before)->onlineTill >= until) {
+				while (before != _participants.end() && App::onlineForSort((*before)->onlineTill, t) >= until) {
 					++before;
 				}
 			}
@@ -367,7 +367,7 @@ void ProfileInner::reorderParticipants() {
 	} else {
 		_participants.clear();
 		if (_peerUser) {
-			_onlineText = App::onlineText(_peerUser->onlineTill, t, true);
+			_onlineText = App::onlineText(_peerUser, t, true);
 		} else {
 			_onlineText = lang(lng_chat_no_members);
 		}
@@ -520,7 +520,7 @@ void ProfileInner::paintEvent(QPaintEvent *e) {
 				if (!data) {
 					data = _participantsData[cnt] = new ParticipantData();
 					data->name.setText(st::profileListNameFont, user->name, _textNameOptions);
-					data->online = App::onlineText(user->onlineTill, l_time);
+					data->online = App::onlineText(user, l_time);
 					data->cankick = (user != App::self()) && (_chatAdmin || (_peerChat->cankick.constFind(user) != _peerChat->cankick.cend()));
 				}
 				p.setPen(st::profileListNameColor->p);

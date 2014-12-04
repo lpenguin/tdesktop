@@ -3,9 +3,6 @@
 
 #define MyAppShortName "Telegram"
 #define MyAppName "Telegram Desktop"
-#define MyAppVersion "0.6.9"
-#define MyAppVersionZero "0.6.9"
-#define MyAppFullVersion "0.6.9.0"
 #define MyAppPublisher "Telegram Messenger LLP"
 #define MyAppURL "https://tdesktop.com"
 #define MyAppExeName "Telegram.exe"
@@ -28,7 +25,7 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=.\..\Win32\Deploy
 OutputBaseFilename=tsetup.{#MyAppVersionZero}
-SetupIconFile=.\SourceFiles\art\iconround256.ico
+SetupIconFile=.\SourceFiles\art\icon256.ico
 UninstallDisplayIcon={app}\Telegram.exe
 Compression=lzma
 SolidCompression=yes         

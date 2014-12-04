@@ -1,5 +1,5 @@
-AppVersionStr=0.6.9
-AppVersion=6009
+AppVersion=`./Version.sh | awk -F " " '{print $1}'`
+AppVersionStr=`./Version.sh | awk -F " " '{print $2}'`
 
 if [ ! -f "./../Linux/Release/deploy/$AppVersionStr/tlinuxupd$AppVersion" ]; then
     echo "tlinuxupd$AppVersion not found!";

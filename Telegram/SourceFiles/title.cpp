@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "lang.h"
@@ -54,7 +54,7 @@ TitleWidget::TitleWidget(Window *window)
 	, _settings(this, lang(lng_menu_settings), st::titleTextButton)
 	, _contacts(this, lang(lng_menu_contacts), st::titleTextButton)
 	, _about(this, lang(lng_menu_about), st::titleTextButton)
-	, _update(this, window)
+	, _update(this, window, lang(lng_menu_update))
 	, _minimize(this, window)
 	, _maximize(this, window)
 	, _restore(this, window)
@@ -63,13 +63,11 @@ TitleWidget::TitleWidget(Window *window)
 {
 
 	setGeometry(0, 0, wnd->width(), st::titleHeight);
-	stateChanged();
-
+	_update.hide();
 	if (App::app()->updatingState() == Application::UpdatingReady) {
-		_update.show();
-	} else {
-		_update.hide();
+		showUpdateBtn();
 	}
+	stateChanged();
 
 	connect(&_settings, SIGNAL(clicked()), window, SLOT(showSettings()));
 	connect(&_contacts, SIGNAL(clicked()), this, SLOT(onContacts()));
@@ -92,6 +90,13 @@ void TitleWidget::paintEvent(QPaintEvent *e) {
 	p.drawPixmap(st::titleIconPos, App::sprite(), st::titleIconRect);
 }
 
+bool TitleWidget::animStep(float64 ms) {
+	float64 phase = sin(M_PI_2 * (ms / st::updateBlinkDuration));
+	if (phase < 0) phase = -phase;
+	_update.setOverLevel(phase);
+	return true;
+}
+
 void TitleWidget::setHideLevel(float64 level) {
 	if (level != hideLevel) {
 		hideLevel = level;
@@ -111,11 +116,14 @@ void TitleWidget::setHideLevel(float64 level) {
 }
 
 void TitleWidget::onContacts() {
+	if (App::wnd() && App::wnd()->isHidden()) App::wnd()->showFromTray();
+
 	if (!App::self()) return;
 	App::wnd()->showLayer(new ContactsBox());
 }
 
 void TitleWidget::onAbout() {
+	if (App::wnd() && App::wnd()->isHidden()) App::wnd()->showFromTray();
 	App::wnd()->showLayer(new AboutBox());
 }
 
@@ -126,7 +134,13 @@ TitleWidget::~TitleWidget() {
 
 void TitleWidget::resizeEvent(QResizeEvent *e) {
 	QPoint p(width() - ((cPlatform() == dbipWindows && lastMaximized) ? 0 : st::sysBtnDelta), 0);
-	
+
+	if (!_update.isHidden()) {
+		p.setX(p.x() - _update.width());
+		_update.move(p);
+		p.setX(p.x() + _update.width());
+	}
+
     if (cPlatform() == dbipWindows) {
         p.setX(p.x() - _close.width());
         _close.move(p);
@@ -138,11 +152,6 @@ void TitleWidget::resizeEvent(QResizeEvent *e) {
         _minimize.move(p);
     }
     
-	if (!_update.isHidden()) {
-		p.setX(p.x() - _update.width());
-		_update.move(p);
-	}
-
 	_settings.move(st::titleMenuOffset, 0);
 	if (MTP::authedId()) {
 		_contacts.show();
@@ -180,21 +189,35 @@ void TitleWidget::stateChanged(Qt::WindowState state) {
 }
 
 void TitleWidget::showUpdateBtn() {
-	if (App::app()->updatingState() == Application::UpdatingReady || cEvalScale(cConfigScale()) != cEvalScale(cRealScale())) {
+	bool updateReady = App::app()->updatingState() == Application::UpdatingReady;
+	if (updateReady || cEvalScale(cConfigScale()) != cEvalScale(cRealScale())) {
+		_update.setText(lang(updateReady ? lng_menu_update : lng_menu_restart));
 		_update.show();
+		resizeEvent(0);
+		_minimize.hide();
+		_restore.hide();
+		_maximize.hide();
+		_close.hide();
+		anim::start(this);
 	} else {
 		_update.hide();
+		if (cPlatform() == dbipWindows) {
+			_minimize.show();
+			maximizedChanged(wnd->windowState().testFlag(Qt::WindowMaximized), true);
+			_close.show();
+		}
+		anim::stop(this);
 	}
 	resizeEvent(0);
 	update();
 }
 
-void TitleWidget::maximizedChanged(bool maximized) {
-	if (lastMaximized == maximized) return;
+void TitleWidget::maximizedChanged(bool maximized, bool force) {
+	if (lastMaximized == maximized && !force) return;
 
 	lastMaximized = maximized;
 
-    if (cPlatform() != dbipWindows) return;
+    if (cPlatform() != dbipWindows || !_update.isHidden()) return;
 	if (maximized) {
 		_maximize.clearState();
 	} else {

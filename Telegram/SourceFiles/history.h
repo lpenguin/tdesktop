@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -629,6 +629,34 @@ inline MTPMessagesFilter typeToMediaFilter(MediaOverviewType &type) {
 	return MTPMessagesFilter();
 }
 
+struct MessageCursor {
+	MessageCursor() : position(0), anchor(0), scroll(QFIXED_MAX) {
+	}
+	MessageCursor(int position, int anchor, int scroll) : position(position), anchor(anchor), scroll(scroll) {
+	}
+	MessageCursor(const QTextEdit &edit) {
+		fillFrom(edit);
+	}
+	void fillFrom(const QTextEdit &edit) {
+		QTextCursor c = edit.textCursor();
+		position = c.position();
+		anchor = c.anchor();
+		QScrollBar *s = edit.verticalScrollBar();
+		scroll = s ? s->value() : QFIXED_MAX;
+	}
+	void applyTo(QTextEdit &edit, bool *lock = 0) {
+		if (lock) *lock = true;
+		QTextCursor c = edit.textCursor();
+		c.setPosition(anchor, QTextCursor::MoveAnchor);
+		c.setPosition(position, QTextCursor::KeepAnchor);
+		edit.setTextCursor(c);
+		QScrollBar *s = edit.verticalScrollBar();
+		if (s) s->setValue(scroll);
+		if (lock) *lock = false;
+	}
+	int position, anchor, scroll;
+};
+
 class HistoryMedia;
 class HistoryMessage;
 class HistoryUnreadBar;
@@ -732,7 +760,7 @@ struct History : public QList<HistoryBlock*> {
 	}
 
 	QString draft;
-	QTextCursor draftCur;
+	MessageCursor draftCursor;
 	int32 lastWidth, lastScrollTop;
 	bool mute;
 
@@ -1218,11 +1246,19 @@ HistoryItem *regItem(HistoryItem *item, bool returnExisting = false);
 class HistoryMedia : public HistoryElem {
 public:
 
+	HistoryMedia(int32 width = 0) : w(width) {
+	}
+
 	virtual HistoryMediaType type() const = 0;
 	virtual const QString inDialogsText() const = 0;
+	virtual const QString inHistoryText() const = 0;
 	virtual bool hasPoint(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const = 0;
 	virtual int32 countHeight(const HistoryItem *parent, int32 width = -1) const {
 		return height();
+	}
+	virtual int32 resize(int32 width, bool dontRecountText = false, const HistoryItem *parent = 0) {
+		w = qMin(width, _maxw);
+		return _height;
 	}
 	virtual TextLinkPtr getLink(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const = 0;
 	virtual void draw(QPainter &p, const HistoryItem *parent, bool selected, int32 width = -1) const = 0;
@@ -1244,6 +1280,14 @@ public:
 		return false;
 	}
 
+	int32 currentWidth() const {
+		return w;
+	}
+
+protected:
+
+	int32 w;
+
 };
 
 class HistoryPhoto : public HistoryMedia {
@@ -1261,6 +1305,7 @@ public:
 		return MediaTypePhoto;
 	}
 	const QString inDialogsText() const;
+	const QString inHistoryText() const;
 	bool hasPoint(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const;
 	TextLinkPtr getLink(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const;
 	HistoryMedia *clone() const;
@@ -1268,6 +1313,8 @@ public:
 	PhotoData *photo() const {
 		return data;
 	}
+
+	void updateFrom(const MTPMessageMedia &media);
 
 	TextLinkPtr lnk() const {
 		return openl;
@@ -1281,7 +1328,7 @@ public:
 private:
 	PhotoData *data;
 	TextLinkPtr openl;
-	int32 w;
+
 };
 
 QString formatSizeText(qint64 size);
@@ -1293,11 +1340,11 @@ public:
 	void initDimensions(const HistoryItem *parent);
 
 	void draw(QPainter &p, const HistoryItem *parent, bool selected, int32 width = -1) const;
-	int32 resize(int32 width, bool dontRecountText = false, const HistoryItem *parent = 0);
 	HistoryMediaType type() const {
 		return MediaTypeVideo;
 	}
 	const QString inDialogsText() const;
+	const QString inHistoryText() const;
 	bool hasPoint(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const;
 	TextLinkPtr getLink(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const;
 	bool uploading() const {
@@ -1311,8 +1358,7 @@ public:
 private:
 	VideoData *data;
 	TextLinkPtr _openl, _savel, _cancell;
-	int32 w;
-
+	
 	QString _size;
 	int32 _thumbw, _thumbx, _thumby;
 
@@ -1327,11 +1373,11 @@ public:
 	void initDimensions(const HistoryItem *parent);
 
 	void draw(QPainter &p, const HistoryItem *parent, bool selected, int32 width = -1) const;
-	int32 resize(int32 width, bool dontRecountText = false, const HistoryItem *parent = 0);
 	HistoryMediaType type() const {
 		return MediaTypeAudio;
 	}
 	const QString inDialogsText() const;
+	const QString inHistoryText() const;
 	bool hasPoint(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const;
 	TextLinkPtr getLink(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const;
 	bool uploading() const {
@@ -1345,7 +1391,6 @@ public:
 private:
 	AudioData *data;
 	TextLinkPtr _openl, _savel, _cancell;
-	int32 w;
 
 	QString _size;
 
@@ -1365,6 +1410,7 @@ public:
 		return MediaTypeDocument;
 	}
 	const QString inDialogsText() const;
+	const QString inHistoryText() const;
 	bool hasPoint(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const;
 	int32 countHeight(const HistoryItem *parent, int32 width = -1) const;
 	bool uploading() const {
@@ -1386,7 +1432,6 @@ private:
 
 	DocumentData *data;
 	TextLinkPtr _openl, _savel, _cancell;
-	int32 w;
 
 	int32 _namew;
 	QString _name, _size;
@@ -1408,6 +1453,7 @@ public:
 		return MediaTypeContact;
 	}
 	const QString inDialogsText() const;
+	const QString inHistoryText() const;
 	bool hasPoint(int32 x, int32 y, const HistoryItem *parent, int32 width) const;
 	TextLinkPtr getLink(int32 x, int32 y, const HistoryItem *parent, int32 width) const;
 	HistoryMedia *clone() const;
@@ -1416,7 +1462,7 @@ public:
 
 private:
 	int32 userId;
-	int32 w, phonew;
+	int32 phonew;
 	Text name;
 	QString phone;
 	UserData *contact;
@@ -1429,6 +1475,7 @@ void deinitImageLinkManager();
 enum ImageLinkType {
 	InvalidImageLink = 0,
 	YouTubeLink,
+	VimeoLink,
 	InstagramLink,
 	GoogleMapsLink
 };
@@ -1439,7 +1486,6 @@ struct ImageLinkData {
 	QString id;
 	QString title, duration;
 	ImagePtr thumb;
-	TextLinkPtr openl;
 	ImageLinkType type;
 	bool loading;
 
@@ -1488,13 +1534,15 @@ public:
 		return MediaTypeImageLink;
 	}
 	const QString inDialogsText() const;
+	const QString inHistoryText() const;
 	bool hasPoint(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const;
 	TextLinkPtr getLink(int32 x, int32 y, const HistoryItem *parent, int32 width = -1) const;
 	HistoryMedia *clone() const;
 
 private:
 	ImageLinkData *data;
-	int32 w;
+	TextLinkPtr link;
+
 };
 
 class HistoryMessage : public HistoryItem {

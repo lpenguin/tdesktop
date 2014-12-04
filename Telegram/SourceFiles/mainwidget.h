@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -174,6 +174,8 @@ public:
 	bool animStep(float64 ms);
 
 	void start(const MTPUser &user);
+	void openLocalUrl(const QString &str);
+	void openUserByName(const QString &name);
 	void startFull(const MTPVector<MTPUser> &users);
 	void applyNotifySetting(const MTPNotifyPeer &peer, const MTPPeerNotifySettings &settings, History *history = 0);
 	void gotNotifySetting(MTPInputNotifyPeer peer, const MTPPeerNotifySettings &settings);
@@ -285,6 +287,8 @@ public:
 	void peerUsernameChanged(PeerData *peer);
 
 	void checkLastUpdate(bool afterSleep);
+	void showAddContact();
+	void showNewGroup();
 
 	~MainWidget();
 
@@ -296,6 +300,7 @@ signals:
 	void dialogRowReplaced(DialogRow *oldRow, DialogRow *newRow);
 	void dialogToTop(const History::DialogLinks &links);
 	void dialogsUpdated();
+	void showPeerAsync(quint64 peer, qint32 msgId, bool back, bool force);
 
 public slots:
 
@@ -321,7 +326,7 @@ public slots:
 	void mainStateChanged(Qt::WindowState state);
 	void updateOnlineDisplay();
 
-	void showPeer(const PeerId &peer, MsgId msgId = 0, bool back = false, bool force = false);
+	void showPeer(quint64 peer, qint32 msgId = 0, bool back = false, bool force = false); // PeerId, MsgId
 	void onTopBarClick();
 	void onPeerShown(PeerData *peer);
 
@@ -354,6 +359,8 @@ private:
 	void updateReceived(const mtpPrime *from, const mtpPrime *end);
 	void handleUpdates(const MTPUpdates &updates);
 	bool updateFail(const RPCError &e);
+
+	void usernameResolveDone(const MTPUser &user);
 
 	void hideAll();
 	void showAll();

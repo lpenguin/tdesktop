@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "lang.h"
@@ -22,7 +22,19 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 #include "mainwidget.h"
 #include "window.h"
 
-NewGroupInner::NewGroupInner() : _contacts(&App::main()->contactsList()), _sel(0), _filteredSel(-1), _mouseSel(false), _selCount(0) {
+NewGroupInner::NewGroupInner() :
+_contacts(&App::main()->contactsList()),
+_sel(0),
+_filteredSel(-1),
+_mouseSel(false),
+_selCount(0),
+_addContactLnk(this, lang(lng_add_contact_button)) {
+
+	connect(&_addContactLnk, SIGNAL(clicked()), App::wnd(), SLOT(onShowAddContact()));
+
+	for (DialogRow *r = _contacts->list.begin; r != _contacts->list.end; r = r->next) {
+		r->attached = 0;
+	}
 
 	_filter = qsl("a");
 	updateFilter();
@@ -99,7 +111,7 @@ NewGroupInner::ContactData *NewGroupInner::contactData(DialogRow *row) {
 			_contactsData.insert(user, data = new ContactData());
 			data->check = false;
 			data->name.setText(st::profileListNameFont, user->name, _textNameOptions);
-			data->online = App::onlineText(user->onlineTill, _time);
+			data->online = App::onlineText(user, _time);
 		} else {
 			data = i.value();
 		}
@@ -165,11 +177,15 @@ void NewGroupInner::paintEvent(QPaintEvent *e) {
 				drawFrom = drawFrom->next;
 			}
 		} else {
-			// ..
+			p.setFont(st::noContactsFont->f);
+			p.setPen(st::noContactsColor->p);
+			p.drawText(QRect(0, 0, width(), st::noContactsHeight - (cContactsReceived() ? st::noContactsFont->height : 0)), lang(cContactsReceived() ? lng_no_contacts : lng_contacts_loading), style::al_center);
 		}
 	} else {
 		if (_filtered.isEmpty()) {
-			// ..
+			p.setFont(st::noContactsFont->f);
+			p.setPen(st::noContactsColor->p);
+			p.drawText(QRect(0, 0, width(), st::noContactsHeight), lang(lng_contacts_not_found), style::al_center);
 		} else {
 			int32 from = yFrom / rh;
 			if (from < 0) from = 0;
@@ -279,9 +295,19 @@ void NewGroupInner::updateFilter(QString filter) {
 		if (_filter.isEmpty()) {
 			resize(width(), _contacts->list.count * rh);
 			if (_contacts->list.count) {
+				if (!_addContactLnk.isHidden()) _addContactLnk.hide();
+				resize(width(), _contacts->list.count * rh);
 				_sel = _contacts->list.begin;
+			} else {
+				resize(width(), st::noContactsHeight);
+				if (cContactsReceived()) {
+					if (_addContactLnk.isHidden()) _addContactLnk.show();
+				} else {
+					if (!_addContactLnk.isHidden()) _addContactLnk.hide();
+				}
 			}
 		} else {
+			if (!_addContactLnk.isHidden()) _addContactLnk.hide();
 			QStringList::const_iterator fb = f.cbegin(), fe = f.cend(), fi;
 
 			_filtered.clear();
@@ -324,7 +350,11 @@ void NewGroupInner::updateFilter(QString filter) {
 			}
 			_filteredSel = _filtered.isEmpty() ? -1 : 0;
 
-			resize(width(), _filtered.size() * rh);
+			if (!_filtered.isEmpty()) {
+				resize(width(), _filtered.size() * rh);
+			} else {
+				resize(width(), st::noContactsHeight);
+			}
 		}
 		if (parentWidget()) parentWidget()->update();
 		loadProfilePhotos(0);
@@ -363,6 +393,10 @@ NewGroupInner::~NewGroupInner() {
 	for (ContactsData::iterator i = _contactsData.begin(), e = _contactsData.end(); i != e; ++i) {
 		delete *i;
 	}
+}
+
+void NewGroupInner::resizeEvent(QResizeEvent *e) {
+	_addContactLnk.move((width() - _addContactLnk.width()) / 2, (st::noContactsHeight + st::noContactsFont->height) / 2);
 }
 
 void NewGroupInner::selectSkip(int32 dir) {
@@ -456,7 +490,7 @@ NewGroupBox::NewGroupBox() : _scroll(this, st::newGroupScroll), _inner(),
 	connect(&_scroll, SIGNAL(scrolled()), &_inner, SLOT(updateSel()));
 	connect(&_scroll, SIGNAL(scrolled()), this, SLOT(onScroll()));
 	connect(&_filter, SIGNAL(changed()), this, SLOT(onFilterUpdate()));
-	connect(&_filter, SIGNAL(cancelled()), this, SIGNAL(onClose()));
+	connect(&_filter, SIGNAL(cancelled()), this, SLOT(onClose()));
 	connect(&_inner, SIGNAL(mustScrollTo(int,int)), &_scroll, SLOT(scrollToY(int,int)));
 	connect(&_inner, SIGNAL(selectAllQuery()), &_filter, SLOT(selectAll()));
 
@@ -518,6 +552,7 @@ void NewGroupBox::paintEvent(QPaintEvent *e) {
 
 			// paint shadows
 			p.fillRect(0, st::participantFilter.height, _width, st::scrollDef.topsh, st::scrollDef.shColor->b);
+			p.fillRect(0, size().height() - st::btnSelectCancel.height - st::scrollDef.bottomsh, _width, st::scrollDef.bottomsh, st::scrollDef.shColor->b);
 
 			// paint button sep
 			p.fillRect(st::btnSelectCancel.width, size().height() - st::btnSelectCancel.height, st::lineWidth, st::btnSelectCancel.height, st::btnSelectSep->b);

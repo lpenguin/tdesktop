@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "lang.h"
@@ -24,7 +24,7 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 
 AboutBox::AboutBox() :
 _done(this, lang(lng_about_done), st::aboutCloseButton),
-_version(this, qsl("[a href=\"https://tdesktop.com/#version_history\"]") + textClean(lang(lng_about_version).replace(qsl("{version}"), QString::fromWCharArray(AppVersionStr))) + qsl("[/a]"), st::aboutVersion, st::defaultTextStyle),
+_version(this, qsl("[a href=\"https://desktop.telegram.org/#changelog\"]") + textClean(lang(lng_about_version).replace(qsl("{version}"), QString::fromWCharArray(AppVersionStr))) + qsl("[/a]"), st::aboutVersion, st::defaultTextStyle),
 _text(this, lang(lng_about_text), st::aboutLabel, st::aboutTextStyle),
 _hiding(false), a_opacity(0, 1) {
 	

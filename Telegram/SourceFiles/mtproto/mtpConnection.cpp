@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 
@@ -298,19 +298,19 @@ int32 MTProtoConnection::start(MTPSessionData *sessionData, int32 dc) {
 
 	dc = data->getDC();
 	if (!dc) {
+		delete data;
+		delete thread;
+		data = 0;
+		thread = 0;
 		return 0;
 	}
 	thread->start();
 	return dc;
 }
 
-void MTProtoConnection::restart() {
-	emit data->needToRestart();
-}
-
 void MTProtoConnection::stop() {
-	data->stop();
-	thread->quit();
+	if (data) data->stop();
+	if (thread) thread->quit();
 }
 
 void MTProtoConnection::stopped() {
@@ -318,6 +318,7 @@ void MTProtoConnection::stopped() {
 	if (data) data->deleteLater();
 	thread = 0;
 	data = 0;
+	delete this;
 }
 
 int32 MTProtoConnection::state() const {
@@ -604,7 +605,7 @@ void MTPabstractTcpConnection::socketRead() {
 }
 
 MTPautoConnection::MTPautoConnection(QThread *thread) : status(WaitingBoth),
-tcpNonce(MTP::nonce<MTPint128>()), httpNonce(MTP::nonce<MTPint128>()), _tcpTimeout(1) {
+tcpNonce(MTP::nonce<MTPint128>()), httpNonce(MTP::nonce<MTPint128>()), _tcpTimeout(MTPMinReceiveDelay) {
 	moveToThread(thread);
 
 	manager.moveToThread(thread);
@@ -642,7 +643,7 @@ void MTPautoConnection::onSocketConnected() {
 		DEBUG_LOG(("Connection Info: sending fake req_pq through tcp transport"));
 
 		if (_tcpTimeout < 0) _tcpTimeout = -_tcpTimeout;
-		tcpTimeoutTimer.start(_tcpTimeout * 1000);
+		tcpTimeoutTimer.start(_tcpTimeout);
 
 		tcpSend(buffer);
 	} else if (status == WaitingHttp || status == UsingHttp) {
@@ -652,7 +653,7 @@ void MTPautoConnection::onSocketConnected() {
 
 void MTPautoConnection::onTcpTimeoutTimer() {
 	if (status == HttpReady || status == WaitingBoth || status == WaitingTcp) {
-		if (_tcpTimeout < 64) _tcpTimeout *= 2;
+		if (_tcpTimeout < MTPMaxReceiveDelay) _tcpTimeout *= 2;
 		_tcpTimeout = -_tcpTimeout;
 
 		QAbstractSocket::SocketState state = sock.state();
@@ -707,15 +708,6 @@ void MTPautoConnection::tcpSend(mtpBuffer &buffer) {
 	TCP_LOG(("TCP Info: write %1 packet %2 bytes").arg(packetNum).arg(len));
 
 	sock.write((const char*)&buffer[0], len);
-	//int64 b = sock.bytesToWrite();
-	//if (b > 100000) {
-	//	int a = 0;
-	//}
-	//sock.flush();
-	//int64 b2 = sock.bytesToWrite();
-	//if (b2 > 0) {
-	//	TCP_LOG(("TCP Info: writing many, %1 left to write").arg(b2));
-	//}
 }
 
 void MTPautoConnection::httpSend(mtpBuffer &buffer) {
@@ -1083,7 +1075,7 @@ MTProtoConnectionPrivate::MTProtoConnectionPrivate(QThread *thread, MTProtoConne
     , conn(0)
     , retryTimeout(1)
     , oldConnection(true)
-    , receiveDelay(MinReceiveDelay)
+    , receiveDelay(MTPMinReceiveDelay)
     , firstSentAt(-1)
     , pingId(0)
     , toSendPingId(0)
@@ -1098,7 +1090,6 @@ MTProtoConnectionPrivate::MTProtoConnectionPrivate(QThread *thread, MTProtoConne
 	oldConnectionTimer.moveToThread(thread);
 	connCheckTimer.moveToThread(thread);
 	retryTimer.moveToThread(thread);
-	pinger.moveToThread(thread);
 	moveToThread(thread);
 
 //	createConn();
@@ -1116,18 +1107,32 @@ MTProtoConnectionPrivate::MTProtoConnectionPrivate(QThread *thread, MTProtoConne
 
 	connect(thread, SIGNAL(started()), this, SLOT(socketStart()));
 	connect(thread, SIGNAL(finished()), this, SLOT(doFinish()));
-	connect(thread, SIGNAL(finished()), thread, SLOT(deleteLater()));
 
 	connect(&retryTimer, SIGNAL(timeout()), this, SLOT(retryByTimer()));
 	connect(&connCheckTimer, SIGNAL(timeout()), this, SLOT(onBadConnection()));
 	connect(&oldConnectionTimer, SIGNAL(timeout()), this, SLOT(onOldConnection()));
-	connect(sessionData->owner(), SIGNAL(authKeyCreated()), this, SLOT(updateAuthKey()));
+	connect(sessionData->owner(), SIGNAL(authKeyCreated()), this, SLOT(updateAuthKey()), Qt::QueuedConnection);
 
-	connect(this, SIGNAL(needToRestart()), this, SLOT(restartNow()));
-	connect(this, SIGNAL(needToReceive()), sessionData->owner(), SLOT(tryToReceive()));
-	connect(this, SIGNAL(stateChanged(qint32)), sessionData->owner(), SLOT(onConnectionStateChange(qint32)));
-	connect(sessionData->owner(), SIGNAL(needToSend()), this, SLOT(tryToSend()));
-	connect(this, SIGNAL(sessionResetDone()), sessionData->owner(), SLOT(onResetDone()));
+	connect(sessionData->owner(), SIGNAL(needToRestart()), this, SLOT(restartNow()), Qt::QueuedConnection);
+	connect(this, SIGNAL(needToReceive()), sessionData->owner(), SLOT(tryToReceive()), Qt::QueuedConnection);
+	connect(this, SIGNAL(stateChanged(qint32)), sessionData->owner(), SLOT(onConnectionStateChange(qint32)), Qt::QueuedConnection);
+	connect(sessionData->owner(), SIGNAL(needToSend()), this, SLOT(tryToSend()), Qt::QueuedConnection);
+	connect(this, SIGNAL(sessionResetDone()), sessionData->owner(), SLOT(onResetDone()), Qt::QueuedConnection);
+
+	static bool _registered = false;
+	if (!_registered) {
+		_registered = true;
+        qRegisterMetaType<QVector<quint64> >("QVector<quint64>");
+	}
+
+	connect(this, SIGNAL(needToSendAsync()), sessionData->owner(), SIGNAL(needToSend()), Qt::QueuedConnection);
+	connect(this, SIGNAL(sendAnythingAsync(quint64)), sessionData->owner(), SLOT(sendAnything(quint64)), Qt::QueuedConnection);
+	connect(this, SIGNAL(sendHttpWaitAsync()), sessionData->owner(), SLOT(sendHttpWait()), Qt::QueuedConnection);
+	connect(this, SIGNAL(sendPongAsync(quint64,quint64)), sessionData->owner(), SLOT(sendPong(quint64,quint64)), Qt::QueuedConnection);
+	connect(this, SIGNAL(sendMsgsStateInfoAsync(quint64, QByteArray)), sessionData->owner(), SLOT(sendMsgsStateInfo(quint64,QByteArray)), Qt::QueuedConnection);
+	connect(this, SIGNAL(resendAsync(quint64,quint64,bool,bool)), sessionData->owner(), SLOT(resend(quint64,quint64,bool,bool)), Qt::QueuedConnection);
+	connect(this, SIGNAL(resendManyAsync(QVector<quint64>,quint64,bool,bool)), sessionData->owner(), SLOT(resendMany(QVector<quint64>,quint64,bool,bool)), Qt::QueuedConnection);
+	connect(this, SIGNAL(resendAllAsync()), sessionData->owner(), SLOT(resendAll()));
 }
 
 void MTProtoConnectionPrivate::onConfigLoaded() {
@@ -1415,7 +1420,7 @@ void MTProtoConnectionPrivate::tryToSend() {
 		toSendPingId = 0;
 	} else {
 		int32 st = getState();
-		DEBUG_LOG(("MTP Info: trying to send after ping, state: %1").arg(st));
+		DEBUG_LOG(("MTP Info: dc %1 trying to send after ping, state: %2").arg(dc).arg(st));
 		if (st != MTProtoConnection::Connected) {
 			return; // just do nothing, if is not connected yet
 		}
@@ -1774,14 +1779,14 @@ void MTProtoConnectionPrivate::onReceivedSome() {
 		int32 ms = getms(true) - firstSentAt;
 		DEBUG_LOG(("MTP Info: response in %1ms, receiveDelay: %2ms").arg(ms).arg(receiveDelay));
 
-		if (ms > 0 && ms * 2 < int32(receiveDelay)) receiveDelay = qMax(ms * 2, int32(MinReceiveDelay));
+		if (ms > 0 && ms * 2 < int32(receiveDelay)) receiveDelay = qMax(ms * 2, int32(MTPMinReceiveDelay));
 		firstSentAt = -1;
 	}
 }
 
 void MTProtoConnectionPrivate::onOldConnection() {
 	oldConnection = true;
-	receiveDelay = MinReceiveDelay;
+	receiveDelay = MTPMinReceiveDelay;
 	DEBUG_LOG(("This connection marked as old! delay now %1ms").arg(receiveDelay));
 }
 
@@ -1815,7 +1820,6 @@ void MTProtoConnectionPrivate::doDisconnect() {
 
 	unlockKey();
 
-	pinger.stop();
 	clearAuthKeyData();
 
 	setState(MTProtoConnection::Disconnected);
@@ -1920,7 +1924,7 @@ void MTProtoConnectionPrivate::handleReceived() {
 				sessionData->setSalt(serverSalt);
 				if (setState(MTProtoConnection::Connected, MTProtoConnection::Connecting)) { // only connected
 					if (restarted) {
-						sessionData->owner()->resendAll();
+						emit resendAllAsync();
 						restarted = false;
 					}
 				}
@@ -1960,7 +1964,7 @@ void MTProtoConnectionPrivate::handleReceived() {
 		uint32 toAckSize = ackRequestData.size();
 		if (toAckSize) {
 			DEBUG_LOG(("MTP Info: will send %1 acks, ids: %2").arg(toAckSize).arg(logVectorLong(ackRequestData)));
-			sessionData->owner()->sendAnything(MTPAckSendWaiting);
+			emit sendAnythingAsync(MTPAckSendWaiting);
 		}
 
 		bool emitSignal = false;
@@ -1988,12 +1992,12 @@ void MTProtoConnectionPrivate::handleReceived() {
 
 		if (!wasConnected) {
 			if (getState() == MTProtoConnection::Connected) {
-				emit sessionData->owner()->needToSendAsync();
+				emit needToSendAsync();
 			}
 		}
 	}
 	if (conn->needHttpWait()) {
-		sessionData->owner()->send(MTPHttpWait(MTP_http_wait(MTP_int(100), MTP_int(30), MTP_int(25000))));
+		emit sendHttpWaitAsync();
 	}
 }
 
@@ -2171,7 +2175,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 
 		if (setState(MTProtoConnection::Connected, MTProtoConnection::Connecting)) { // maybe only connected
 			if (restarted) {
-				sessionData->owner()->resendAll();
+				emit resendAllAsync();
 				restarted = false;
 			}
 		}
@@ -2193,10 +2197,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 		DEBUG_LOG(("Message Info: msgs_state_req received, ids: %1").arg(logVectorLong(ids)));
 		if (!idsCount) return 1;
 
-		MTPMsgsStateInfo req(MTP_msgs_state_info(MTP_long(msgId), MTPstring()));
-		string &info(req._msgs_state_info().vinfo._string().v);
-		info.resize(idsCount);
-
+		QByteArray info(idsCount, Qt::Uninitialized);
 		{
 			QReadLocker lock(sessionData->receivedIdsMutex());
 			const mtpMsgIdsMap &receivedIds(sessionData->receivedIdsSet());
@@ -2233,8 +2234,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 				info[i] = state;
 			}
 		}
-
-		sessionData->owner()->send(req);
+		emit sendMsgsStateInfoAsync(msgId, info);
 	} return 1;
 
 	case mtpc_msgs_state_info: {
@@ -2372,9 +2372,11 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 		DEBUG_LOG(("Message Info: resend of msgs requested, ids: %1").arg(logVectorLong(ids)));
 		if (!idsCount) return (badTime ? 0 : 1);
 
-		for (QVector<MTPlong>::const_iterator i = ids.cbegin(), e = ids.cend(); i != e; ++i) {
-			resend(i->v, 0, false, true);
+		QVector<quint64> toResend(ids.size(), Qt::Uninitialized);
+		for (int32 i = 0, l = ids.size(); i < l; ++i) {
+			toResend[i] = ids.at(i).v;
 		}
+		resendMany(toResend, 0, false, true);
 	} return 1;
 
 	case mtpc_rpc_result: {
@@ -2431,7 +2433,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 		sessionData->setSalt(data.vserver_salt.v);
 
 		mtpMsgId firstMsgId = data.vfirst_msg_id.v;
-		QVector<mtpMsgId> toResend;
+		QVector<quint64> toResend;
 		{
 			QReadLocker locker(sessionData->haveSentMutex());
 			const mtpRequestMap &haveSent(sessionData->haveSentMap());
@@ -2441,9 +2443,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 				if (i.value()->requestId) toResend.push_back(i.key());
 			}
 		}
-		for (uint32 i = 0, l = toResend.size(); i < l; ++i) {
-			resend(toResend[i], 10, true);
-		}
+		resendMany(toResend, 10, true);
 
 		mtpBuffer update(end - from);
 		if (end > from) memcpy(update.data(), from, (end - from) * sizeof(mtpPrime));
@@ -2460,7 +2460,7 @@ int32 MTProtoConnectionPrivate::handleOneReceived(const mtpPrime *from, const mt
 		MTPPing msg(from, end);
 		DEBUG_LOG(("Message Info: ping received, ping_id: %1, sending pong..").arg(msg.vping_id.v));
 
-		sessionData->owner()->send(MTP_pong(MTP_long(msgId), msg.vping_id));
+		emit sendPongAsync(msgId, msg.vping_id.v);
 	} return 1;
 
 	case mtpc_pong: {
@@ -2720,9 +2720,19 @@ void MTProtoConnectionPrivate::handleMsgsStates(const QVector<MTPlong> &ids, con
 	}
 }
 
-mtpRequestId MTProtoConnectionPrivate::resend(mtpMsgId msgId, uint64 msCanWait, bool forceContainer, bool sendMsgStateInfo) {
-	if (msgId == pingMsgId) return 0xFFFFFFFF;
-	return sessionData->owner()->resend(msgId, msCanWait, forceContainer, sendMsgStateInfo);
+void MTProtoConnectionPrivate::resend(quint64 msgId, quint64 msCanWait, bool forceContainer, bool sendMsgStateInfo) {
+	if (msgId == pingMsgId) return;
+	emit resendAsync(msgId, msCanWait, forceContainer, sendMsgStateInfo);
+}
+
+void MTProtoConnectionPrivate::resendMany(QVector<quint64> msgIds, quint64 msCanWait, bool forceContainer, bool sendMsgStateInfo) {
+	for (int32 i = 0, l = msgIds.size(); i < l; ++i) {
+		if (msgIds.at(i) == pingMsgId) {
+			msgIds.remove(i);
+			--l;
+		}
+	}
+	emit resendManyAsync(msgIds, msCanWait, forceContainer, sendMsgStateInfo);
 }
 
 void MTProtoConnectionPrivate::onConnected() {
@@ -3192,18 +3202,14 @@ void MTProtoConnectionPrivate::authKeyCreated() {
 	if (sessionData->getSalt()) { // else receive salt in bad_server_salt first, then try to send all the requests
 		setState(MTProtoConnection::Connected);
 		if (restarted) {
-			sessionData->owner()->resendAll();
+			emit resendAllAsync();
 			restarted = false;
 		}
 	}
 
 	toSendPingId = MTP::nonce<uint64>(); // get server_salt
 
-	emit sessionData->owner()->needToSendAsync();
-
-//	disconnect(&pinger, SIGNAL(timeout()), 0, 0);
-//	connect(&pinger, SIGNAL(timeout()), this, SLOT(sendPing()));
-//	pinger.start(30000);
+	emit needToSendAsync();
 }
 
 void MTProtoConnectionPrivate::clearAuthKeyData() {
@@ -3222,10 +3228,6 @@ void MTProtoConnectionPrivate::clearAuthKeyData() {
 		delete authKeyStrings;
 		authKeyStrings = 0;
 	}
-}
-
-void MTProtoConnectionPrivate::sendPing() {
-	sessionData->owner()->send(MTPPing(MTP::nonce<MTPlong>()));
 }
 
 void MTProtoConnectionPrivate::onError(bool mayBeBadKey) {
@@ -3406,5 +3408,4 @@ void MTProtoConnectionPrivate::stop() {
 }
 
 MTProtoConnection::~MTProtoConnection() {
-	stopped();
 }

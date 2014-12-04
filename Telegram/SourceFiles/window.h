@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
@@ -29,6 +29,9 @@ class MainWidget;
 class SettingsWidget;
 class BackgroundWidget;
 class LayeredWidget;
+namespace Local {
+	class ClearManager;
+}
 
 class ConnectingWidget : public QWidget {
 	Q_OBJECT
@@ -51,21 +54,6 @@ private:
 	LinkButton _reconnect;
 
 };
-
-class TempDirDeleter : public QObject {
-	Q_OBJECT
-public:
-	TempDirDeleter(QThread *thread);
-
-public slots:
-	void onStart();
-
-signals:
-	void succeed();
-	void failed();
-
-};
-
 
 class NotifyWindow : public QWidget, public Animated {
 	Q_OBJECT
@@ -94,6 +82,8 @@ public:
 		return history ? _index : -1;
 	}
 
+	void unlinkHistory(History *hist = 0);
+
 	~NotifyWindow();
 
 public slots:
@@ -101,7 +91,7 @@ public slots:
 	void hideByTimer();
 	void checkLastInput();
 
-	void unlinkHistory(History *hist = 0);
+	void unlinkHistoryAndNotify();
 
 private:
 
@@ -182,6 +172,7 @@ public:
 	void showLayer(LayeredWidget *w);
 	void replaceLayer(LayeredWidget *w);
 	void hideLayer();
+	bool hideInnerLayer();
 
 	bool layerShown();
 
@@ -205,7 +196,8 @@ public:
 		TempDirEmpty,
 	};
 	TempDirState tempDirState();
-	void tempDirDelete();
+	TempDirState localImagesState();
+	void tempDirDelete(int task);
 
 	void quit();
 
@@ -243,17 +235,23 @@ public slots:
 
 	void onInactiveTimer();
 
-	void onTempDirCleared();
-	void onTempDirClearFailed();
+	void onClearFinished(int task, void *manager);
+	void onClearFailed(int task, void *manager);
 
 	void notifyFire();
 	void updateTrayMenu(bool force = false);
 
+	void onShowAddContact();
+	void onShowNewGroup();
+	void onLogout();
+	void onLogoutSure();
+	void updateGlobalMenu(); // for OS X top menu
+
 signals:
 
 	void resized(const QSize &size);
-	void tempDirCleared();
-	void tempDirClearFailed();
+	void tempDirCleared(int task);
+	void tempDirClearFailed(int task);
 
 protected:
 
@@ -263,7 +261,7 @@ private:
 
 	void placeSmallCounter(QImage &img, int size, int count, style::color bg, const QPoint &shift, style::color color);
 	QImage iconWithCounter(int size, int count, style::color bg, bool smallIcon);
-	QImage icon16, icon32, icon64;
+	QImage icon16, icon32, icon64, iconbig16, iconbig32, iconbig64;
 
 	QWidget *centralwidget;
 
@@ -276,8 +274,7 @@ private:
 	QWidget *_topWidget; // temp hack for CountrySelect
 	ConnectingWidget *_connecting;
 
-	TempDirDeleter *_tempDeleter;
-	QThread *_tempDeleterThread;
+	Local::ClearManager *_clearManager;
 
 	void clearWidgets();
 

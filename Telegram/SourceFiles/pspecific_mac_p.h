@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
  
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
  
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -36,6 +36,8 @@ public:
         
     virtual void activeSpaceChanged() {
     }
+	virtual void darkModeChanged() {
+	}
     virtual void notifyClicked(unsigned long long peer) {
     }
     virtual void notifyReplied(unsigned long long peer, const char *str) {
@@ -48,6 +50,7 @@ public:
 };
 
 void objc_holdOnTop(WId winId);
+bool objc_darkMode();
 void objc_showOverAll(WId winId, bool canFocus = true);
 void objc_bringToBack(WId winId);
 void objc_activateWnd(WId winId);
@@ -62,6 +65,8 @@ void objc_start();
 void objc_finish();
 bool objc_execUpdater();
 void objc_execTelegram();
+
+void objc_registerCustomScheme();
 
 void objc_activateProgram();
 bool objc_moveFile(const QString &from, const QString &to);

@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -71,7 +71,6 @@ public:
 
 	MTProtoConnection();
 	int32 start(MTPSessionData *data, int32 dc = 0); // return dc
-	void restart();
 	void stop();
 	void stopped();
 	~MTProtoConnection();
@@ -310,6 +309,15 @@ signals:
 	void stateChanged(qint32 newState);
 	void sessionResetDone();
 
+	void needToSendAsync();
+	void sendAnythingAsync(quint64 msWait);
+	void sendHttpWaitAsync();
+	void sendPongAsync(quint64 msgId, quint64 pingId);
+	void sendMsgsStateInfoAsync(quint64 msgId, QByteArray data);
+	void resendAsync(quint64 msgId, quint64 msCanWait, bool forceContainer, bool sendMsgStateInfo);
+	void resendManyAsync(QVector<quint64> msgIds, quint64 msCanWait, bool forceContainer, bool sendMsgStateInfo);
+	void resendAllAsync();
+
 public slots:
 
 	void retryByTimer();
@@ -340,8 +348,6 @@ public slots:
 	void tryToSend();
 
 	bool updateAuthKey();
-
-	void sendPing();
 
 	void onConfigLoaded();
 
@@ -395,7 +401,8 @@ private:
 	mtpPingId pingId, toSendPingId;
 	mtpMsgId pingMsgId;
 
-	mtpRequestId resend(mtpMsgId msgId, uint64 msCanWait = 0, bool forceContainer = false, bool sendMsgStateInfo = false);
+	void resend(quint64 msgId, quint64 msCanWait = 0, bool forceContainer = false, bool sendMsgStateInfo = false);
+	void resendMany(QVector<quint64> msgIds, quint64 msCanWait = 0, bool forceContainer = false, bool sendMsgStateInfo = false);
 
 	template <typename TRequest>
 	void sendRequestNotSecure(const TRequest &request);
@@ -453,7 +460,5 @@ private:
 	void dhClientParamsSend();
 	void authKeyCreated();
 	void clearAuthKeyData();
-
-	QTimer pinger;
 
 };

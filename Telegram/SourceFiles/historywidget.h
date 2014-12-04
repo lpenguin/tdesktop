@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -67,6 +67,9 @@ public:
 	void updateSize();
 
 	void updateMsg(const HistoryItem *msg);
+
+	bool canCopySelected() const;
+	bool canDeleteSelected() const;
 
 	void getSelectionState(int32 &selectedForForward, int32 &selectedForDelete) const;
 	void clearSelectedItems(bool onlyTextSelection = false);
@@ -393,6 +396,9 @@ public slots:
 
 	void onAnimActiveStep();
 
+	void onDraftSaveDelayed();
+	void onDraftSave(bool delayed = false);
+
 private:
 
 	bool messagesFailed(const RPCError &error, mtpRequestId requestId);
@@ -401,6 +407,7 @@ private:
 	void addMessagesToBack(const QVector<MTPMessage> &messages);
 	void chatLoaded(const MTPmessages_ChatFull &res);
 
+	void writeDraft(const QString *text = 0, const MessageCursor *cursor = 0);
 	void setFieldText(const QString &text);
 
 	QStringList getMediasFromMime(const QMimeData *d);
@@ -437,7 +444,7 @@ private:
 	int32 _selCount; // < 0 - text selected, focus list, not _field
 
 	LocalImageLoader imageLoader;
-	bool noTypingUpdate;
+	bool _synthedTextUpdate;
 
 	PeerId loadingChatId;
 	mtpRequestId loadingRequestId;
@@ -466,6 +473,10 @@ private:
 
 	mtpRequestId _typingRequest;
 	QTimer _typingStopTimer;
+
+	uint64 _saveDraftStart;
+	bool _saveDraftText;
+	QTimer _saveDraftTimer;
 
 };
 

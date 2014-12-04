@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,17 +13,17 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
-static const int32 AppVersion = 6009;
-static const wchar_t *AppVersionStr = L"0.6.9";
+static const int32 AppVersion = 6015;
+static const wchar_t *AppVersionStr = L"0.6.15";
 
 static const wchar_t *AppNameOld = L"Telegram Win (Unofficial)";
 static const wchar_t *AppName = L"Telegram Desktop";
 
-static const wchar_t *AppId = L"{53F49750-6209-4FBF-9CA8-7A333C87D1ED}";
+static const wchar_t *AppId = L"{53F49750-6209-4FBF-9CA8-7A333C87D1ED}"; // used in updater.cpp and Setup.iss for Windows
 static const wchar_t *AppFile = L"Telegram";
 
 #include "settings.h"
@@ -37,6 +37,7 @@ enum {
 	MTPAckSendWaiting = 10000, // how much time to wait for some more requests, when sending msg acks
 	MTPResendThreshold = 1, // how much ints should message contain for us not to resend, but to check it's state
 	MTPContainerLives = 600, // container lives 10 minutes in haveSent map
+	MTPMinReceiveDelay = 4000, // 4 seconds
 	MTPMaxReceiveDelay = 64000, // 64 seconds
 	MTPConnectionOldTimeout = 192000, // 192 seconds
 	MTPTcpConnectionWaitTimeout = 3000, // 3 seconds waiting for tcp, until we accept http
@@ -50,7 +51,6 @@ enum {
 
 	MTPDebugBufferSize = 1024 * 1024, // 1 mb start size
 
-	MinReceiveDelay = 1000, // 1 seconds
 	MaxSelectedItems = 100,
 
 	MaxPhoneTailLength = 18, // rest of the phone number, without country code (seen 12 at least)
@@ -101,7 +101,15 @@ enum {
 
 	MaxMessageSize = 4096,
 	MaxHttpRedirects = 5, // when getting external data/images
+
+	WriteMapTimeout = 1000,
+	SaveDraftTimeout = 1000, // save draft after 1 secs of not changing text
+	SaveDraftAnywayTimeout = 5000, // or save anyway each 5 secs
 };
+
+inline bool isServiceUser(uint64 id) {
+	return (id == 333000) || (id == 777000);
+}
 
 #ifdef Q_OS_WIN
 inline const GUID &cGUID() {
@@ -138,15 +146,15 @@ struct BuiltInDc {
 };
 
 static const BuiltInDc _builtInDcs[] = {
-		{ 1, "173.240.5.1", 443 },
-		{ 2, "149.154.167.51", 443 },
-		{ 3, "174.140.142.6", 443 },
-		{ 4, "149.154.167.91", 443 },
-		{ 5, "149.154.171.5", 443 }
+	{ 1, "149.154.175.50", 443 },
+	{ 2, "149.154.167.51", 443 },
+	{ 3, "174.140.142.6", 443 },
+	{ 4, "149.154.167.91", 443 },
+	{ 5, "149.154.171.5", 443 }
 };
 
 static const BuiltInDc _builtInTestDcs[] = {
-		{ 1, "173.240.5.253", 443 }
+	{ 1, "173.240.5.253", 443 }
 };
 
 inline const BuiltInDc *builtInDcs() {

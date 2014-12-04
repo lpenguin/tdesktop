@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "lang.h"
@@ -273,6 +273,7 @@ void MediaView::onDownload() {
 		if (cur.isEmpty()) {
 			_save.hide();
 		} else {
+			if (!QDir().exists(path)) QDir().mkpath(path);
 			toName = filedialogNextFilename(_doc->name, cur, path);
 			if (toName != cur && !QFile(cur).copy(toName)) {
 				toName = QString();
@@ -282,6 +283,7 @@ void MediaView::onDownload() {
 		if (!_photo || !_photo->full->loaded()) {
 			_save.hide();
 		} else {
+			if (!QDir().exists(path)) QDir().mkpath(path);
 			toName = filedialogDefaultName(qsl("photo"), qsl(".jpg"), path);
 			if (!_photo->full->pix().toImage().save(toName, "JPG")) {
 				toName = QString();
@@ -468,7 +470,6 @@ void MediaView::showPhoto(PhotoData *photo) {
 	_doc = 0;
 	_zoom = 0;
 	MTP::clearLoaderPriorities();
-	_photo->full->load();
 	_full = -1;
 	_current = QPixmap();
 	_down = OverNone;
@@ -490,6 +491,7 @@ void MediaView::showPhoto(PhotoData *photo) {
 	_width = _w;
 	_from = App::user(_photo->user);
 	updateControls();
+	_photo->full->load();
 	if (isHidden()) {
 		psUpdateOverlayed(this);
 		show();

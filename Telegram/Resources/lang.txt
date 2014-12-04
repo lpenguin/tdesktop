@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,15 +13,17 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 direction: "LTR";
 
-lng_maintitle: "Telegram D";
+lng_maintitle: "Telegram Desktop";
 
 lng_menu_contacts: "Contacts";
 lng_menu_settings: "Settings";
 lng_menu_about: "About";
+lng_menu_update: "Update";
+lng_menu_restart: "Restart";
 
 lng_open_from_tray: "Open Telegram";
 lng_minimize_to_tray: "Minimize to tray";
@@ -61,6 +63,7 @@ lng_connecting: "Connecting..";
 lng_reconnecting: "Reconnect in %1 s..";
 lng_reconnecting_try_now: "Try now";
 
+lng_status_service_notifications: "service notifications";
 lng_status_offline: "last seen a long time ago";
 lng_status_recently: "last seen recently";
 lng_status_last_week: "last seen within a week";
@@ -87,14 +90,12 @@ lng_server_error: "Internal server error.";
 lng_flood_error: "Too much tries. Please try again later.";
 lng_deleted: "Unknown";
 
-lng_intro1: "Welcome to an unofficial [b]desktop[/b] client
-of [b]Telegram[/b] mobile messenger.";
-lng_intro2: "Visit [a href=\"https://telegram.org/\"]telegram.org[/a] to learn more.";
-lng_start_msgs: "Start Messaging";
+lng_intro: "Welcome to the official [a href=\"https://telegram.org/\"]Telegram[/a] desktop app.
+It's [b]fast[/b] and [b]secure[/b].";
+lng_start_msgs: "START MESSAGING";
 
-lng_intro_back: "Back";
-lng_intro_next: "Next";
-lng_intro_finish: "Finish";
+lng_intro_next: "NEXT";
+lng_intro_finish: "SIGN UP";
 
 lng_phone_ph: "Your phone number";
 lng_phone_title: "Your Phone";
@@ -110,7 +111,7 @@ lng_country_none: "Country not found";
 lng_country_select: "Select Country";
 
 lng_code_ph: "Your code";
-lng_code_desc: "We have sent you an SMS with activation
+lng_code_desc: "We have sent you a message with activation
 code to your phone. Please enter it below.";
 lng_code_call: "Telegram will dial your number in %1:%2";
 lng_code_calling: "Requesting a call from Telegram..";
@@ -124,6 +125,8 @@ lng_bad_chat_title: "Please enter new chat title.";
 lng_bad_photo: "Bad image selected.";
 
 lng_signup_title: "Information and photo";
+lng_signup_desc: "Please enter your name and
+upload a photo.";
 lng_signup_firstname: "First Name";
 lng_signup_lastname: "Last Name";
 
@@ -132,6 +135,9 @@ lng_dlg_conversations: "Conversations";
 lng_dlg_messages: "Messages";
 lng_dlg_new_group_name: "Group name";
 lng_dlg_create_group: "Create";
+lng_no_contacts: "You have no contacts";
+lng_contacts_loading: "Loading..";
+lng_contacts_not_found: "No contacts found";
 
 lng_settings_profile: "Profile";
 lng_settings_edit: "Edit";
@@ -153,6 +159,8 @@ Minimum length is 5 characters.";
 lng_username_invalid: "This name is invalid.";
 lng_username_occupied: "This name is already occupied.";
 lng_username_too_short: "This name is too short.";
+lng_username_bad_symbols: "This name has bad symbols.";
+lng_username_available: "This name is available.";
 
 lng_settings_section_contact_info: "Contact info";
 lng_settings_phone_number: "Phone number:";
@@ -218,6 +226,15 @@ lng_download_path_clearing: "Clearing..";
 lng_download_path_cleared: "Cleared!";
 lng_download_path_clear_failed: "Clear failed :(";
 
+lng_settings_section_cache: "Local storage";
+lng_settings_no_images_cached: "No cached images found!";
+lng_settings_image_cached: "Cached: {count} image, {size}";
+lng_settings_images_cached: "Cached: {count} images, {size}";
+lng_local_images_clear: "Clear All";
+lng_local_images_clearing: "Clearing..";
+lng_local_images_cleared: "Cleared!";
+lng_local_images_clear_failed: "Clear failed :(";
+
 lng_settings_section_advanced: "Advanced";
 lng_connection_type: "Connection type:";
 lng_connection_auto_connecting: "Default (connecting..)";
@@ -236,6 +253,7 @@ lng_connection_save: "Save";
 lng_settings_reset: "Reset other sessions";
 lng_settings_reset_done: "Sessions reset done";
 lng_settings_logout: "Log Out";
+lng_sure_logout: "Are you sure you want to log out?";
 
 lng_settings_need_restart: "You need to restart for applying
 some of the new settings. Restart now?";
@@ -442,7 +460,7 @@ lng_selected_delete_confirm: "Delete";
 lng_emoji_no_recent: "Recent emojis will be here";
 
 lng_about_version: "Version {version}";
-lng_about_text: "Unofficial free messaging app based on [a href=\"https://core.telegram.org/mtproto\"]MTProto[/a] and
+lng_about_text: "Official free messaging app based on [a href=\"https://core.telegram.org/mtproto\"]MTProto[/a] and
 [a href=\"https://core.telegram.org/api\"]Telegram API[/a] for speed and security
 
 This software is licensed under [a href=\"https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE\"]GNU GPL[/a] version 3,
@@ -476,5 +494,22 @@ lng_mac_always_open_with: "Always Open With";
 lng_mac_this_app_can_open: "This application can open \"{file}\".";
 lng_mac_not_known_app: "It's not known if this application can open \"{file}\".";
 
-// Keys finished
+lng_mac_menu_about: "About Telegram";
+lng_mac_menu_preferences: "Preferences...";
+lng_mac_menu_file: "File";
+lng_mac_menu_logout: "Log Out";
+lng_mac_menu_edit: "Edit";
+lng_mac_menu_undo: "Undo";
+lng_mac_menu_redo: "Redo";
+lng_mac_menu_cut: "Cut";
+lng_mac_menu_copy: "Copy";
+lng_mac_menu_paste: "Paste";
+lng_mac_menu_delete: "Delete";
+lng_mac_menu_select_all: "Select All";
+lng_mac_menu_window: "Window";
+lng_mac_menu_contacts: "Contacts";
+lng_mac_menu_add_contact: "Add Contact";
+lng_mac_menu_new_group: "New Group";
+lng_mac_menu_show: "Show Telegram";
 
+// Keys finished

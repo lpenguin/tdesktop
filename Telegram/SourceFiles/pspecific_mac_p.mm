@@ -1,6 +1,6 @@
-	/*
+/*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
  
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
  
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "pspecific_mac_p.h"
@@ -36,6 +36,8 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 
 @end
 
+ApplicationDelegate *_sharedDelegate = nil;
+
 @implementation ApplicationDelegate {
 }
 
@@ -53,8 +55,6 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 }
 
 @end
-
-ApplicationDelegate *_sharedDelegate = nil;
 
 class QNSString {
 public:
@@ -85,6 +85,7 @@ QNSString objc_lang(LangKey key) {
 
 - (id) init:(PsMacWindowPrivate *)aWnd;
 - (void) activeSpaceDidChange:(NSNotification *)aNotification;
+- (void) darkModeChanged:(NSNotification *)aNotification;
 
 @end
 
@@ -145,6 +146,10 @@ public:
     wnd->activeSpaceChanged();
 }
 
+- (void) darkModeChanged:(NSNotification *)aNotification {
+	wnd->darkModeChanged();
+}
+
 @end
 
 @implementation NotifyHandler {
@@ -180,6 +185,7 @@ public:
 
 PsMacWindowPrivate::PsMacWindowPrivate() : data(new PsMacWindowData(this)) {
     [[[NSWorkspace sharedWorkspace] notificationCenter] addObserver:data->observerHelper selector:@selector(activeSpaceDidChange:) name:NSWorkspaceActiveSpaceDidChangeNotification object:nil];
+	[[NSDistributedNotificationCenter defaultCenter] addObserver:data->observerHelper selector:@selector(darkModeChanged:) name:QNSString(strNotificationAboutThemeChange()).s() object:nil];
 }
 
 void PsMacWindowPrivate::setWindowBadge(const QString &str) {
@@ -198,6 +204,13 @@ void PsMacWindowPrivate::updateDelegate() {
 void objc_holdOnTop(WId winId) {
     NSWindow *wnd = [reinterpret_cast<NSView *>(winId) window];
     [wnd setHidesOnDeactivate:NO];
+}
+
+bool objc_darkMode() {
+	NSDictionary *dict = [[NSUserDefaults standardUserDefaults] persistentDomainForName:NSGlobalDomain];
+	id style = [dict objectForKey:QNSString(strStyleOfInterface()).s()];
+	BOOL darkModeOn = ( style && [style isKindOfClass:[NSString class]] && NSOrderedSame == [style caseInsensitiveCompare:@"dark"] );
+	return darkModeOn ? true : false;
 }
 
 void objc_showOverAll(WId winId, bool canFocus) {
@@ -434,9 +447,9 @@ void objc_showInFinder(const QString &file, const QString &path) {
 - (BOOL) refreshDataInViews: (NSArray*)subviews {
     for (id view in subviews) {
         NSString *cls = [view className];
-        if ([cls isEqualToString:@"FI_TBrowserTableView"]) {
+        if ([cls isEqualToString:QNSString(strNeedToReload()).s()]) {
             [view reloadData];
-        } else if ([cls isEqualToString:@"FI_TListView"] || [cls isEqualToString:@"FI_TIconView"]) {
+        } else if ([cls isEqualToString:QNSString(strNeedToRefresh1()).s()] || [cls isEqualToString:QNSString(strNeedToRefresh2()).s()]) {
             [view reloadData];
             return YES;
         } else {
@@ -567,7 +580,7 @@ void objc_openFile(const QString &f, bool openwith) {
             [openPanel setAllowsMultipleSelection:NO];
             [openPanel setResolvesAliases:YES];
             [openPanel setTitle:objc_lang(lng_mac_choose_app).s()];
-            [openPanel setMessage:[[objc_lang(lng_mac_choose_text).s() stringByReplacingOccurrencesOfString:@"{file}" withString:name] stringByAppendingFormat:@"%d", [[NSProcessInfo processInfo] processIdentifier]]];
+            [openPanel setMessage:[objc_lang(lng_mac_choose_text).s() stringByReplacingOccurrencesOfString:@"{file}" withString:name]];
             
             NSArray *appsPaths = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationDirectory inDomains:NSLocalDomainMask];
             if ([appsPaths count]) [openPanel setDirectoryURL:[appsPaths firstObject]];
@@ -622,6 +635,9 @@ void objc_finish() {
     if (!objcLang.isEmpty()) {
         objcLang.clear();
     }
+}
+
+void objc_registerCustomScheme() {
 }
 
 BOOL _execUpdater(BOOL update = YES) {

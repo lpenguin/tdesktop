@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,12 +13,13 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "style.h"
 
 #include "flatinput.h"
+#include "window.h"
 
 namespace {
 	class FlatInputStyle : public QCommonStyle {
@@ -57,6 +58,7 @@ FlatInput::FlatInput(QWidget *parent, const style::flatInput &st, const QString 
 
 	connect(this, SIGNAL(textChanged(const QString &)), this, SLOT(onTextChange(const QString &)));
 	connect(this, SIGNAL(textEdited(const QString &)), this, SLOT(onTextEdited()));
+	if (App::wnd()) connect(this, SIGNAL(selectionChanged()), App::wnd(), SLOT(updateGlobalMenu()));
 
 	setStyle(&_flatInputStyle);
 	setTextMargins(0, 0, 0, 0);
@@ -262,10 +264,12 @@ void FlatInput::onTextEdited() {
 	_oldtext = text();
 	if (was != _oldtext) emit changed();
 	updatePlaceholder();
+	if (App::wnd()) App::wnd()->updateGlobalMenu();
 }
 
 void FlatInput::onTextChange(const QString &text) {
 	_oldtext = text;
+	if (App::wnd()) App::wnd()->updateGlobalMenu();
 }
 
 void FlatInput::notaBene() {

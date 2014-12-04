@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "application.h"
@@ -27,6 +27,8 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 #include "lang.h"
 #include "boxes/confirmbox.h"
 #include "langloaderplain.h"
+
+#include "localstorage.h"
 
 namespace {
 	Application *mainApp = 0;
@@ -87,6 +89,8 @@ Application::Application(int &argc, char **argv) : PsApplication(argc, argv),
     serverName(psServerPrefix() + cGUIDStr()), closing(false),
 	updateRequestId(0), updateReply(0), updateThread(0), updateDownloader(0) {
 
+	DEBUG_LOG(("Application Info: creation.."));
+
 	QByteArray d(QDir((cPlatform() == dbipWindows ? cExeDir() : cWorkingDir()).toLower()).absolutePath().toUtf8());
 	char h[33] = { 0 };
 	hashMd5Hex(d.constData(), d.size(), h);
@@ -131,13 +135,16 @@ Application::Application(int &argc, char **argv) : PsApplication(argc, argv),
 		}
 	}
 
+	Local::start();
 	style::startManager();
 	anim::startManager();
 	historyInit();
 
+	DEBUG_LOG(("Application Info: inited.."));
+
     window = new Window();
 
-    psInstallEventFilter();
+	psInstallEventFilter();
 
 	connect(&socket, SIGNAL(connected()), this, SLOT(socketConnected()));
 	connect(&socket, SIGNAL(disconnected()), this, SLOT(socketDisconnected()));
@@ -155,7 +162,7 @@ Application::Application(int &argc, char **argv) : PsApplication(argc, argv),
 
 	connect(&killDownloadSessionsTimer, SIGNAL(timeout()), this, SLOT(killDownloadSessions()));
 
-    if (cManyInstance()) {
+	if (cManyInstance()) {
 		startApp();
 	} else {
         DEBUG_LOG(("Application Info: connecting local socket to %1..").arg(serverName));
@@ -172,6 +179,7 @@ void Application::onAppUpdate(const MTPhelp_AppUpdate &response) {
 		startUpdateCheck();
 	} else {
 		updateThread = new QThread();
+		connect(updateThread, SIGNAL(finished()), updateThread, SLOT(deleteLater()));
 		updateDownloader = new PsUpdateDownloader(updateThread, response.c_help_appUpdate());
 		updateThread->start();
 	}
@@ -194,6 +202,7 @@ void Application::updateGotCurrent() {
 		int32 currentVersion = m.captured(1).toInt();
 		if (currentVersion > AppVersion) {
 			updateThread = new QThread();
+			connect(updateThread, SIGNAL(finished()), updateThread, SLOT(deleteLater()));
 			updateDownloader = new PsUpdateDownloader(updateThread, m.captured(2));
 			updateThread->start();
 		}
@@ -240,7 +249,7 @@ void Application::onUpdateFailed() {
 	if (updateDownloader) {
 		updateDownloader->deleteLater();
 		updateDownloader = 0;
-		if (updateThread) updateThread->deleteLater();
+		if (updateThread) updateThread->quit();
 		updateThread = 0;
 	}
 
@@ -470,7 +479,7 @@ void Application::stopUpdate() {
 	if (updateDownloader) {
 		updateDownloader->deleteLater();
 		updateDownloader = 0;
-		if (updateThread) updateThread->deleteLater();
+		if (updateThread) updateThread->quit();
 		updateThread = 0;
 	}
 }
@@ -557,6 +566,9 @@ void Application::socketConnected() {
 	for (QStringList::const_iterator i = lst.cbegin(), e = lst.cend(); i != e; ++i) {
 		commands += qsl("SEND:") + _escapeTo7bit(*i) + ';';
 	}
+	if (!cStartUrl().isEmpty()) {
+		commands += qsl("OPEN:") + _escapeTo7bit(cStartUrl()) + ';';
+	}
 	commands += qsl("CMD:show;");
 	DEBUG_LOG(("Application Info: writing commands %1").arg(commands));
 	socket.write(commands.toLocal8Bit());
@@ -617,9 +629,14 @@ void Application::socketError(QLocalSocket::LocalSocketError e) {
 }
 
 void Application::startApp() {
+	DEBUG_LOG(("Application Info: starting app.."));
+
+	Local::ReadMapState state = Local::readMap(QByteArray());
+
+	DEBUG_LOG(("Application Info: local map read.."));
 	App::readUserConfig();
-	if (!MTP::localKey().created()) {
-		MTP::createLocalKey(QByteArray());
+	if (!Local::oldKey().created()) {
+		Local::createOldKey();
 		cSetNeedConfigResave(true);
 	}
 	if (cNeedConfigResave()) {
@@ -627,10 +644,12 @@ void Application::startApp() {
 		App::writeUserConfig();
 		cSetNeedConfigResave(false);
 	}
+	DEBUG_LOG(("Application Info: user config read.."));
 
 	window->createWinId();
 	window->init();
 
+	DEBUG_LOG(("Application Info: window created.."));
 	readSupportTemplates();
 
 	MTP::start();
@@ -638,8 +657,12 @@ void Application::startApp() {
 	MTP::setStateChangedHandler(mtpStateChanged);
 	MTP::setSessionResetHandler(mtpSessionReset);
 
+	DEBUG_LOG(("Application Info: MTP started.."));
+
 	initImageLinkManager();
 	App::initMedia();
+
+	DEBUG_LOG(("Application Info: showing."));
 
 	if (MTP::authedId()) {
 		window->setupMain(false);
@@ -654,6 +677,9 @@ void Application::startApp() {
 	}
 
 	QNetworkProxyFactory::setUseSystemConfiguration(true);
+    if (Local::oldMapVersion() < AppVersion) {
+		psRegisterCustomScheme();
+	}
 }
 
 void Application::socketDisconnected() {
@@ -673,6 +699,7 @@ void Application::newInstanceConnected() {
 }
 
 void Application::readClients() {
+	QString startUrl;
 	QStringList toSend;
 	for (ClientSockets::iterator i = clients.begin(), e = clients.end(); i != e; ++i) {
 		i->second.append(i->first->readAll());
@@ -688,6 +715,10 @@ void Application::readClients() {
 				} else if (cmd.startsWith(qsl("SEND:"))) {
 					if (cSendPaths().isEmpty()) {
 						toSend.append(_escapeFrom7bit(cmds.mid(from + 5, to - from - 5)));
+					}
+				} else if (cmd.startsWith(qsl("OPEN:"))) {
+					if (cStartUrl().isEmpty()) {
+						startUrl = _escapeFrom7bit(cmds.mid(from + 5, to - from - 5));
 					}
 				} else {
 					LOG(("Application Error: unknown command %1 passed in local socket").arg(QString(cmd.constData(), cmd.length())));
@@ -708,6 +739,13 @@ void Application::readClients() {
 		if (App::wnd()) {
 			App::wnd()->sendPaths();
 		}
+	}
+	if (!startUrl.isEmpty()) {
+		cSetStartUrl(startUrl);
+	}
+	if (!cStartUrl().isEmpty() && App::main() && App::self()) {
+		App::main()->openLocalUrl(cStartUrl());
+		cSetStartUrl(QString());
 	}
 }
 
@@ -757,14 +795,15 @@ Application::~Application() {
 	delete updateReply;
 	delete ::uploader;
 	updateReply = 0;
-	delete updateDownloader;
+	if (updateDownloader) updateDownloader->deleteLater();
 	updateDownloader = 0;
-	delete updateThread;
+	if (updateThread) updateThread->quit();
 	updateThread = 0;
 
 	delete window;
 
 	style::stopManager();
+	Local::stop();
 }
 
 Application *Application::app() {

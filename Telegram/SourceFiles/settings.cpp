@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "pspecific.h"
@@ -23,9 +23,10 @@ bool gTestMode = false;
 bool gDebug = false;
 bool gManyInstance = false;
 QString gKeyFile;
-QString gWorkingDir, gExeDir;
+QString gWorkingDir, gExeDir, gExeName;
 
 QStringList gSendPaths;
+QString gStartUrl;
 
 QString gDialogLastPath, gDialogHelperPath; // optimize QFileDialog
 
@@ -42,7 +43,7 @@ DBIWorkMode gWorkMode = dbiwmWindowAndTray;
 DBIConnectionType gConnectionType = dbictAuto;
 ConnectionProxy gConnectionProxy;
 bool gSeenTrayTooltip = false;
-bool gRestartingUpdate = false, gRestarting = false;
+bool gRestartingUpdate = false, gRestarting = false, gWriteProtected = false;
 int32 gLastUpdateCheck = 0;
 bool gNoStartUpdate = false;
 bool gStartToSettings = false;
@@ -96,6 +97,8 @@ QUrl gUpdateURL = QUrl(qsl("http://tdesktop.com/linux/tupdates/current"));
 #error Unknown platform
 #endif
 
+bool gContactsReceived = false;
+
 void settingsParseArgs(int argc, char *argv[]) {
 	if (cPlatform() == dbipMac) {
 		gCustomNotifies = false;
@@ -104,6 +107,7 @@ void settingsParseArgs(int argc, char *argv[]) {
 	}
     memset_rand(&gInstance, sizeof(gInstance));
 	gExeDir = psCurrentExeDirectory(argc, argv);
+	gExeName = psCurrentExeName(argc, argv);
 	for (int32 i = 0; i < argc; ++i) {
 		if (string("-release") == argv[i]) {
 			gTestMode = false;
@@ -125,6 +129,13 @@ void settingsParseArgs(int argc, char *argv[]) {
 			for (++i; i < argc; ++i) {
 				gSendPaths.push_back(QString::fromLocal8Bit(argv[i]));
 			}
+		} else if (string("-workdir") == argv[i] && i + 1 < argc) {
+			QString dir = QString::fromLocal8Bit(argv[++i]);
+			if (QDir().exists(dir)) {
+				gWorkingDir = dir;
+			}
+		} else if (string("--") == argv[i] && i + 1 < argc) {
+			gStartUrl = QString::fromLocal8Bit(argv[++i]);
 		}
 	}
 }
@@ -137,47 +148,59 @@ const RecentEmojiPack &cGetRecentEmojis() {
 			cSetRecentEmojisPreload(RecentEmojiPreload());
 			r.reserve(p.size());
 			for (RecentEmojiPreload::const_iterator i = p.cbegin(), e = p.cend(); i != e; ++i) {
-				EmojiPtr ep(getEmoji(i->first));
-				if (ep) {
-					r.push_back(qMakePair(ep, i->second));
+				uint32 code = ((i->first & 0xFFFFU) == 0xFE0FU) ? ((i->first >> 16) & 0xFFFFU) : i->first;
+				EmojiPtr ep(getEmoji(code));
+				if (!ep) continue;
+
+				if (ep->postfix) {
+					int32 j = 0, l = r.size();
+					for (; j < l; ++j) {
+						if (r[j].first->code == code) {
+							break;
+						}
+					}
+					if (j < l) {
+						continue;
+					}
 				}
+				r.push_back(qMakePair(ep, i->second));
 			}
 		}
 		uint32 defaultRecent[] = {
-			0xD83DDE02,
-			0xD83DDE18,
-			0x2764,
-			0xD83DDE0D,
-			0xD83DDE0A,
-			0xD83DDE01,
-			0xD83DDC4D,
-			0x263A,
-			0xD83DDE14,
-			0xD83DDE04,
-			0xD83DDE2D,
-			0xD83DDC8B,
-			0xD83DDE12,
-			0xD83DDE33,
-			0xD83DDE1C,
-			0xD83DDE48,
-			0xD83DDE09,
-			0xD83DDE03,
-			0xD83DDE22,
-			0xD83DDE1D,
-			0xD83DDE31,
-			0xD83DDE21,
-			0xD83DDE0F,
-			0xD83DDE1E,
-			0xD83DDE05,
-			0xD83DDE1A,
-			0xD83DDE4A,
-			0xD83DDE0C,
-			0xD83DDE00,
-			0xD83DDE0B,
-			0xD83DDE06,
-			0xD83DDC4C,
-			0xD83DDE10,
-			0xD83DDE15,
+			0xD83DDE02U,
+			0xD83DDE18U,
+			0x2764U,
+			0xD83DDE0DU,
+			0xD83DDE0AU,
+			0xD83DDE01U,
+			0xD83DDC4DU,
+			0x263AU,
+			0xD83DDE14U,
+			0xD83DDE04U,
+			0xD83DDE2DU,
+			0xD83DDC8BU,
+			0xD83DDE12U,
+			0xD83DDE33U,
+			0xD83DDE1CU,
+			0xD83DDE48U,
+			0xD83DDE09U,
+			0xD83DDE03U,
+			0xD83DDE22U,
+			0xD83DDE1DU,
+			0xD83DDE31U,
+			0xD83DDE21U,
+			0xD83DDE0FU,
+			0xD83DDE1EU,
+			0xD83DDE05U,
+			0xD83DDE1AU,
+			0xD83DDE4AU,
+			0xD83DDE0CU,
+			0xD83DDE00U,
+			0xD83DDE0BU,
+			0xD83DDE06U,
+			0xD83DDC4CU,
+			0xD83DDE10U,
+			0xD83DDE15U,
 		};
 		for (int32 i = 0, s = sizeof(defaultRecent) / sizeof(defaultRecent[0]); i < s; ++i) {
 			if (r.size() >= EmojiPadPerRow * EmojiPadRowsPerPage) break;

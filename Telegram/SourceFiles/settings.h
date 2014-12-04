@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -62,6 +62,7 @@ inline void cForceWorkingDir(const QString &newDir) {
 	QDir dir;
 	if (!gWorkingDir.isEmpty()) dir.mkpath(gWorkingDir);
 }
+DeclareReadSetting(QString, ExeName);
 DeclareReadSetting(QString, ExeDir);
 DeclareSetting(QString, DialogLastPath);
 DeclareSetting(QString, DialogHelperPath);
@@ -90,6 +91,7 @@ DeclareSetting(ConnectionProxy, ConnectionProxy);
 DeclareSetting(bool, SeenTrayTooltip);
 DeclareSetting(bool, RestartingUpdate);
 DeclareSetting(bool, Restarting);
+DeclareSetting(bool, WriteProtected);
 DeclareSetting(int32, LastUpdateCheck);
 DeclareSetting(bool, NoStartUpdate);
 DeclareSetting(bool, StartToSettings);
@@ -124,11 +126,12 @@ T convertScale(T v) {
 DeclareSetting(DBIEmojiTab, EmojiTab);
 
 struct EmojiData {
-	EmojiData(int32 x, int32 y, uint32 code, uint32 code2, int32 len) : x(x), y(y), code(code), code2(code2), len(len) {
+	EmojiData(uint16 x, uint16 y, uint32 code, uint32 code2, uint16 len, uint16 postfix = 0) : x(x), y(y), code(code), code2(code2), len(len), postfix(postfix) {
 	}
-	int32 x, y;
+	uint16 x, y;
 	uint32 code, code2;
-	int32 len;
+	uint16 len;
+	uint16 postfix;
 };
 
 typedef const EmojiData *EmojiPtr;
@@ -144,6 +147,7 @@ const RecentEmojiPack &cGetRecentEmojis();
 DeclareReadSetting(QString, LangFile);
 
 DeclareSetting(QStringList, SendPaths);
+DeclareSetting(QString, StartUrl);
 
 DeclareSetting(bool, Retina);
 DeclareSetting(float64, RetinaFactor);
@@ -154,5 +158,7 @@ DeclareReadSetting(uint64, Instance);
 
 DeclareReadSetting(DBIPlatform, Platform);
 DeclareReadSetting(QUrl, UpdateURL);
+
+DeclareSetting(bool, ContactsReceived);
 
 void settingsParseArgs(int argc, char *argv[]);

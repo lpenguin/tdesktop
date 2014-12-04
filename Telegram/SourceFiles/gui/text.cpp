@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "text.h"
@@ -563,12 +563,6 @@ public:
 				ch = *ptr;
 				chInt = (chInt << 16) | 0x20E3;
 			}
-		} else if (ptr + 1 < end && (ptr + 1)->unicode() == 0xFE0F) { // check for 32bit not surrogate emoji
-			_t->_text.push_back(ch);
-			skipBack = -1;
-			++ptr;
-			ch = *ptr;
-			chInt = (chInt << 16) | 0xFE0F;
 		}
 
 		lastSkipped = skip;
@@ -602,8 +596,13 @@ public:
 				_t->_text.push_back(*++ptr);
 			}
 		}
+		int emojiLen = e->len;
+		if (ptr + 1 < end && (ptr + 1)->unicode() == 0xFE0F) {
+			_t->_text.push_back(*++ptr);
+			++emojiLen;
+		}
 
-		createBlock(-e->len);
+		createBlock(-emojiLen);
 		emoji = e;
 	}
 
@@ -811,6 +810,20 @@ namespace {
 		start = stop;
 	}
 
+}
+
+void TextLink::onClick(Qt::MouseButton button) const {
+	if (button == Qt::LeftButton || button == Qt::MiddleButton) {
+		QString url = TextLink::encoded();
+		QRegularExpressionMatch telegramMe = QRegularExpression(qsl("^https?://telegram\\.me/([a-zA-Z0-9\\.\\_]+)(\\?|$)"), QRegularExpression::CaseInsensitiveOption).match(url);
+		if (telegramMe.hasMatch()) {
+			App::openUserByName(telegramMe.captured(1));
+		} else if (QRegularExpression(qsl("^tg://[a-zA-Z0-9]+"), QRegularExpression::CaseInsensitiveOption).match(url).hasMatch()) {
+			App::openLocalUrl(url);
+		} else {
+			QDesktopServices::openUrl(TextLink::encoded());
+		}
+	}
 }
 
 void HashtagLink::onClick(Qt::MouseButton button) const {
@@ -2936,6 +2949,7 @@ namespace {
 		regOneProtocol(qsl("http"));
 		regOneProtocol(qsl("https"));
 		regOneProtocol(qsl("ftp"));
+		regOneProtocol(qsl("tg")); // local urls
 
 		regOneTopDomain(qsl("ac"));
 		regOneTopDomain(qsl("ad"));
@@ -4045,16 +4059,28 @@ bool textSplit(QString &sendingText, QString &leftText, int32 limit) {
 				}
 			}
 		}
+		EmojiPtr e = 0;
 		if (ch->isHighSurrogate()) {
 			if (ch + 1 < end && (ch + 1)->isLowSurrogate()) {
-				++ch;
+				e = getEmoji((ch->unicode() << 16) | (ch + 1)->unicode());
+				if (!e) {
+					++ch;
+				}
 			}
 		} else {
-			if (ch + 1 < end && ((((ch->unicode() >= 48 && ch->unicode() < 58) || ch->unicode() == 35) && (ch + 1)->unicode() == 0x20E3) || (ch + 1)->unicode() == 0xFE0F)) {
-				if (getEmoji((ch->unicode() << 16) | (ch + 1)->unicode())) {
-					++ch;
-					++s;
+			if (ch + 1 < end) {
+				if (((ch->unicode() >= 48 && ch->unicode() < 58) || ch->unicode() == 35) && (ch + 1)->unicode() == 0x20E3) {
+					e = getEmoji((ch->unicode() << 16) | (ch + 1)->unicode());
+				} else if ((ch + 1)->unicode() == 0xFE0F) {
+					e = getEmoji(ch->unicode());
 				}
+			}
+		}
+		if (e) {
+			ch += (e->len - 1);
+			if (ch + 1 < end && (ch + 1)->unicode() == 0xFE0F) {
+				++ch;
+				++s;
 			}
 		}
 		if (s >= limit) {

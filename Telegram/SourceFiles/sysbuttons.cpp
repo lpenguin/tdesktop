@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "style.h"
@@ -23,11 +23,23 @@ Copyright (c) 2014 John Preston, https://tdesktop.com
 #include "window.h"
 #include "application.h"
 
-SysBtn::SysBtn(QWidget *parent, const style::sysButton &st) : Button(parent),
-	_st(st), a_color(_st.color->c) {
-	resize(_st.size);
+SysBtn::SysBtn(QWidget *parent, const style::sysButton &st, const QString &text) : Button(parent),
+_st(st), a_color(_st.color->c), _overLevel(0), _text(text) {
+	int32 w = _st.size.width() + (_text.isEmpty() ? 0 : ((_st.size.width() - _st.img.pxWidth()) / 2 + st::titleTextButton.font->m.width(_text)));
+	resize(w, _st.size.height());
 	setCursor(style::cur_default);
 	connect(this, SIGNAL(stateChanged(int, ButtonStateChangeSource)), this, SLOT(onStateChange(int, ButtonStateChangeSource)));
+}
+
+void SysBtn::setText(const QString &text) {
+	_text = text;
+	int32 w = _st.size.width() + (_text.isEmpty() ? 0 : ((_st.size.width() - _st.img.pxWidth()) / 2 + st::titleTextButton.font->m.width(_text)));
+	resize(w, _st.size.height());
+}
+
+void SysBtn::setOverLevel(float64 level) {
+	_overLevel = level;
+	update();
 }
 
 void SysBtn::onStateChange(int oldState, ButtonStateChangeSource source) {
@@ -45,9 +57,25 @@ void SysBtn::onStateChange(int oldState, ButtonStateChangeSource source) {
 void SysBtn::paintEvent(QPaintEvent *e) {
 	QPainter p(this);
 
-	int x = (width() - _st.img.pxWidth()) / 2, y = (height() - _st.img.pxHeight()) / 2;
-	p.fillRect(x, y, _st.img.pxWidth(), _st.img.pxHeight(), a_color.current());
+	int x = width() - ((_st.size.width() + _st.img.pxWidth()) / 2), y = (height() - _st.img.pxHeight()) / 2;
+	QColor c = a_color.current();
+	if (_overLevel > 0) {
+		if (_overLevel >= 1) {
+			c = _st.overColor->c;
+		} else {
+			c.setRedF(c.redF() * (1 - _overLevel) + _st.overColor->c.redF() * _overLevel);
+			c.setGreenF(c.greenF() * (1 - _overLevel) + _st.overColor->c.greenF() * _overLevel);
+			c.setBlueF(c.blueF() * (1 - _overLevel) + _st.overColor->c.blueF() * _overLevel);
+		}
+	}
+	p.fillRect(x, y, _st.img.pxWidth(), _st.img.pxHeight(), c);
 	p.drawPixmap(QPoint(x, y), App::sprite(), _st.img);
+	
+	if (!_text.isEmpty()) {
+		p.setFont(st::titleTextButton.font->f);
+		p.setPen(c);
+		p.drawText((_st.size.width() - _st.img.pxWidth()) / 2, st::titleTextButton.textTop + st::titleTextButton.font->ascent, _text);
+	}
 }
 
 HitTestType SysBtn::hitTest(const QPoint &p) const {
@@ -103,7 +131,7 @@ void CloseBtn::onClick() {
 	wnd->close();
 }
 
-UpdateBtn::UpdateBtn(QWidget *parent, Window *window) : SysBtn(parent, st::sysUpd), wnd(window) {
+UpdateBtn::UpdateBtn(QWidget *parent, Window *window, const QString &text) : SysBtn(parent, st::sysUpd, text), wnd(window) {
 	connect(this, SIGNAL(clicked()), this, SLOT(onClick()));
 }
 

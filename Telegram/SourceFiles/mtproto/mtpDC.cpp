@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,11 +13,13 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include "mtpDC.h"
 #include "mtp.h"
+
+#include "localstorage.h"
 
 namespace {
 	
@@ -65,7 +67,7 @@ namespace {
 				QByteArray data, decrypted;
 				stream >> data;
 
-				if (!MTP::localKey().created()) {
+				if (!Local::oldKey().created()) {
 					LOG(("MTP Error: reading encrypted keys without local key!"));
 					continue;
 				}
@@ -77,7 +79,7 @@ namespace {
 				uint32 fullDataLen = data.size() - 16;
 				decrypted.resize(fullDataLen);
 				const char *dataKey = data.constData(), *encrypted = data.constData() + 16;
-				aesDecryptLocal(encrypted, decrypted.data(), fullDataLen, &MTP::localKey(), dataKey);
+				aesDecryptLocal(encrypted, decrypted.data(), fullDataLen, &Local::oldKey(), dataKey);
 				uchar sha1Buffer[20];
 				if (memcmp(hashSha1(decrypted.constData(), decrypted.size(), sha1Buffer), dataKey, 16)) {
 					LOG(("MTP Error: bad decrypt key, data from user-config not decrypted"));
@@ -271,7 +273,7 @@ namespace {
 			}
 			QByteArray encrypted(16 + fullSize, Qt::Uninitialized); // 128bit of sha1 - key128, sizeof(data), data
 			hashSha1(toEncrypt.constData(), toEncrypt.size(), encrypted.data());
-			aesEncryptLocal(toEncrypt.constData(), encrypted.data() + 16, fullSize, &MTP::localKey(), encrypted.constData());
+			aesEncryptLocal(toEncrypt.constData(), encrypted.data() + 16, fullSize, &Local::oldKey(), encrypted.constData());
 
 			DEBUG_LOG(("MTP Info: keys file opened for writing %1 keys").arg(keysToWrite.size()));
 			QDataStream keysStream(&keysFile);
@@ -444,6 +446,7 @@ void mtpUpdateDcOptions(const QVector<MTPDcOption> &options) {
 
 MTProtoConfigLoader::MTProtoConfigLoader() : _enumCurrent(0), _enumRequest(0) {
 	connect(&_enumDCTimer, SIGNAL(timeout()), this, SLOT(enumDC()));
+	connect(this, SIGNAL(killCurrentSession(qint32,qint32)), this, SLOT(onKillCurrentSession(qint32,qint32)), Qt::QueuedConnection);
 }
 
 void MTProtoConfigLoader::load() {
@@ -455,10 +458,24 @@ void MTProtoConfigLoader::load() {
 	_enumDCTimer.start(MTPEnumDCTimeout);
 }
 
+void MTProtoConfigLoader::onKillCurrentSession(qint32 request, qint32 current) {
+	if (request == _enumRequest && current == _enumCurrent) {
+		if (_enumRequest) {
+			MTP::cancel(_enumRequest);
+			_enumRequest = 0;
+		}
+		if (_enumCurrent) {
+			MTP::killSession(MTP::cfg + _enumCurrent);
+			_enumCurrent = 0;
+		}
+	}
+}
+
 void MTProtoConfigLoader::done() {
 	_enumDCTimer.stop();
-	if (_enumRequest) MTP::cancel(_enumRequest);
-	if (_enumCurrent) MTP::killSession(_enumCurrent);
+	if (_enumRequest || _enumCurrent) {
+		emit killCurrentSession(_enumRequest, _enumCurrent);
+	}
 	emit loaded();
 }
 

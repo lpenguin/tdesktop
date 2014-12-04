@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #pragma once
 
@@ -235,30 +235,25 @@ public:
 
 	template <typename TRequest>
 	mtpRequestId send(const TRequest &request, RPCResponseHandler callbacks = RPCResponseHandler(), uint64 msCanWait = 0, bool needsLayer = false, bool toMainDC = false, mtpRequestId after = 0); // send mtp request
-	void sendAnything(uint64 msCanWait);
 
 	void cancel(mtpRequestId requestId, mtpMsgId msgId);
 	int32 requestState(mtpRequestId requestId) const;
 	int32 getState() const;
 	QString transport() const;
 
-	mtpRequestId resend(mtpMsgId msgId, uint64 msCanWait = 0, bool forceContainer = false, bool sendMsgStateInfo = false);
-	void resendAll(); // after connection restart
-
 	void sendPrepared(const mtpRequest &request, uint64 msCanWait = 0, bool newRequest = true); // nulls msgId and seqNo in request, if newRequest = true
-	void sendPreparedWithInit(const mtpRequest &request, uint64 msCanWait = 0);
 
 signals:
 
 	void authKeyCreated();
-
 	void needToSend();
-	void needToSendAsync(); // emit this signal, to emit needToSend() in MTProtoSession thread
-
-	void startSendTimer(int msec); // manipulating timer from all threads
-	void stopSendTimer();
+	void needToRestart();
 
 public slots:
+
+	mtpRequestId resend(quint64 msgId, quint64 msCanWait = 0, bool forceContainer = false, bool sendMsgStateInfo = false);
+	void resendMany(QVector<quint64> msgIds, quint64 msCanWait, bool forceContainer, bool sendMsgStateInfo);
+	void resendAll(); // after connection restart
 
 	void authKeyCreatedForDC();
 	void layerWasInitedForDC(bool wasInited);
@@ -267,6 +262,11 @@ public slots:
 	void checkRequestsByTimer();
 	void onConnectionStateChange(qint32 newState);
 	void onResetDone();
+
+	void sendAnything(quint64 msCanWait);
+	void sendHttpWait();
+	void sendPong(quint64 msgId, quint64 pingId);
+	void sendMsgsStateInfo(quint64 msgId, QByteArray data);
 
 private:
 	

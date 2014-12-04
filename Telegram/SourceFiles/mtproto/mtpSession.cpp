@@ -1,6 +1,6 @@
 /*
 This file is part of Telegram Desktop,
-an unofficial desktop messaging app, see https://telegram.org
+the official desktop version of Telegram messaging app, see https://telegram.org
 
 Telegram Desktop is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU General Public License for more details.
 
 Full license: https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE
-Copyright (c) 2014 John Preston, https://tdesktop.com
+Copyright (c) 2014 John Preston, https://desktop.telegram.org
 */
 #include "stdafx.h"
 #include <QtCore/QSharedPointer>
@@ -83,9 +83,6 @@ void MTProtoSession::start(int32 dcenter, uint32 connects) {
 	timeouter.start(1000);
 
 	connect(&sender, SIGNAL(timeout()), this, SIGNAL(needToSend()));
-	connect(this, SIGNAL(startSendTimer(int)), &sender, SLOT(start(int)));
-	connect(this, SIGNAL(stopSendTimer()), &sender, SLOT(stop()));
-	connect(this, SIGNAL(needToSendAsync()), this, SIGNAL(needToSend()));
 
 	MTProtoDCMap &dcs(mtpDCMap());
 
@@ -116,26 +113,24 @@ void MTProtoSession::start(int32 dcenter, uint32 connects) {
 			if (lock && dc->connectionInited()) {
 				data.setLayerWasInited(true);
 			}
-			connect(dc.data(), SIGNAL(authKeyCreated()), this, SLOT(authKeyCreatedForDC()));
-			connect(dc.data(), SIGNAL(layerWasInited(bool)), this, SLOT(layerWasInitedForDC(bool)));
+			connect(dc.data(), SIGNAL(authKeyCreated()), this, SLOT(authKeyCreatedForDC()), Qt::QueuedConnection);
+			connect(dc.data(), SIGNAL(layerWasInited(bool)), this, SLOT(layerWasInitedForDC(bool)), Qt::QueuedConnection);
 		}
 	}
 }
 
 void MTProtoSession::restart() {
-	for (MTProtoConnections::const_iterator i = connections.cbegin(), e = connections.cend(); i != e; ++i) {
-		(*i)->restart();
-	}
+	emit needToRestart();
 }
 
 void MTProtoSession::stop() {
-	while (connections.size()) {
+	while (!connections.isEmpty()) {
 		connections.back()->stop();
 		connections.pop_back();
 	}
 }
 
-void MTProtoSession::sendAnything(uint64 msCanWait) {
+void MTProtoSession::sendAnything(quint64 msCanWait) {
 	uint64 ms = getms(true);
 	if (msSendCall) {
 		if (ms > msSendCall + msWait) {
@@ -150,14 +145,33 @@ void MTProtoSession::sendAnything(uint64 msCanWait) {
 		msWait = msCanWait;
 	}
 	if (msWait) {
+		DEBUG_LOG(("MTP Info: dc %1 can wait for %2ms from current %3").arg(dcId).arg(msWait).arg(msSendCall));
 		msSendCall = ms;
-		emit startSendTimer(msWait);
-		DEBUG_LOG(("MTP Info: can wait for %1ms from current %2").arg(msWait).arg(msSendCall));
+		sender.start(msWait);
 	} else {
-		emit stopSendTimer();
+		DEBUG_LOG(("MTP Info: dc %1 stopped send timer, can wait for %2ms from current %3").arg(dcId).arg(msWait).arg(msSendCall));
+		sender.stop();
 		msSendCall = 0;
-		emit needToSendAsync();
+		emit needToSend();
 	}
+}
+
+void MTProtoSession::sendHttpWait() {
+	send(MTPHttpWait(MTP_http_wait(MTP_int(100), MTP_int(30), MTP_int(25000))), RPCResponseHandler(), 50);
+}
+
+void MTProtoSession::sendPong(quint64 msgId, quint64 pingId) {
+	send(MTP_pong(MTP_long(msgId), MTP_long(pingId)));
+}
+
+void MTProtoSession::sendMsgsStateInfo(quint64 msgId, QByteArray data) {
+	MTPMsgsStateInfo req(MTP_msgs_state_info(MTP_long(msgId), MTPstring()));
+	string &info(req._msgs_state_info().vinfo._string().v);
+	info.resize(data.size());
+	if (!data.isEmpty()) {
+		memcpy(&info[0], data.constData(), data.size());
+	}
+	send(req);
 }
 
 void MTProtoSession::checkRequestsByTimer() {
@@ -308,7 +322,7 @@ QString MTProtoSession::transport() const {
 	return QString();
 }
 
-mtpRequestId MTProtoSession::resend(mtpMsgId msgId, uint64 msCanWait, bool forceContainer, bool sendMsgStateInfo) {
+mtpRequestId MTProtoSession::resend(quint64 msgId, quint64 msCanWait, bool forceContainer, bool sendMsgStateInfo) {
 	mtpRequest request;
 	{
 		QWriteLocker locker(data.haveSentMutex());
@@ -348,6 +362,12 @@ mtpRequestId MTProtoSession::resend(mtpMsgId msgId, uint64 msCanWait, bool force
 	}
 }
 
+void MTProtoSession::resendMany(QVector<quint64> msgIds, quint64 msCanWait, bool forceContainer, bool sendMsgStateInfo) {
+	for (int32 i = 0, l = msgIds.size(); i < l; ++i) {
+		resend(msgIds.at(i), msCanWait, forceContainer, sendMsgStateInfo);
+	}
+}
+
 void MTProtoSession::resendAll() {
 	QVector<mtpMsgId> toResend;
 	{
@@ -377,11 +397,6 @@ void MTProtoSession::sendPrepared(const mtpRequest &request, uint64 msCanWait, b
 	DEBUG_LOG(("MTP Info: added, requestId %1").arg(request->requestId));
 
 	sendAnything(msCanWait);
-}
-
-void MTProtoSession::sendPreparedWithInit(const mtpRequest &request, uint64 msCanWait) {
-	request->needsLayer = true;
-	sendPrepared(request, msCanWait, false);
 }
 
 QReadWriteLock *MTProtoSession::keyMutex() const {
@@ -427,6 +442,7 @@ int32 MTProtoSession::getDC() const {
 }
 
 void MTProtoSession::tryToReceive() {
+	int32 cnt = 0;
 	while (true) {
 		mtpRequestId requestId;
 		mtpResponse response;
@@ -445,6 +461,7 @@ void MTProtoSession::tryToReceive() {
 		} else {
 			_mtp_internal::execCallback(requestId, response.constData(), response.constData() + response.size());
 		}
+		++cnt;
 	}
 }
 
