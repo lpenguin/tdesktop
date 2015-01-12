@@ -50,7 +50,7 @@ namespace {
 };
 
 PsMainWindow::PsMainWindow(QWidget *parent) : QMainWindow(parent),
-posInited(false), trayIcon(0), trayIconMenu(0), icon256(qsl(":/gui/art/icon256.png")), iconbig256(icon256), wndIcon(QPixmap::fromImage(icon256)) {
+posInited(false), trayIcon(0), trayIconMenu(0), icon256(qsl(":/gui/art/icon256.png")), iconbig256(icon256), wndIcon(QPixmap::fromImage(icon256, Qt::ColorOnly)) {
     connect(&psIdleTimer, SIGNAL(timeout()), this, SLOT(psIdleTimeout()));
     psIdleTimer.setSingleShot(false);
     launcher = UnityLauncher::create("telegram.desktop");
@@ -807,6 +807,9 @@ QString psCurrentExeDirectory(int argc, char *argv[]) {
     QString first = argc ? QString::fromLocal8Bit(argv[0]) : QString();
     if (!first.isEmpty()) {
         QFileInfo info(first);
+        if (info.isSymLink()) {
+            info = info.symLinkTarget();
+        }
         if (info.exists()) {
             return QDir(info.absolutePath()).absolutePath() + '/';
         }
@@ -818,7 +821,10 @@ QString psCurrentExeName(int argc, char *argv[]) {
 	QString first = argc ? QString::fromLocal8Bit(argv[0]) : QString();
 	if (!first.isEmpty()) {
 		QFileInfo info(first);
-		if (info.exists()) {
+        if (info.isSymLink()) {
+            info = info.symLinkTarget();
+        }
+        if (info.exists()) {
 			return info.fileName();
 		}
 	}

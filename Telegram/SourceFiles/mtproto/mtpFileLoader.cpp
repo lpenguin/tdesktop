@@ -57,7 +57,7 @@ id(0), access(0), fileIsOpen(false), size(size), type(mtpc_storage_fileUnknown) 
 
 mtpFileLoader::mtpFileLoader(int32 dc, const uint64 &id, const uint64 &access, mtpTypeId locType, const QString &to, int32 size) : prev(0), next(0),
 priority(0), inQueue(false), complete(false), triedLocal(false), skippedBytes(0), nextRequestOffset(0), lastComplete(false),
-dc(dc), locationType(locType),
+dc(dc), locationType(locType), volume(0), local(0), secret(0),
 id(id), access(access), file(to), fname(to), fileIsOpen(false), duplicateInData(false), size(size), type(mtpc_storage_fileUnknown) {
 	LoaderQueues::iterator i = queues.find(MTP::dld[0] + dc);
 	if (i == queues.cend()) {
@@ -68,7 +68,7 @@ id(id), access(access), file(to), fname(to), fileIsOpen(false), duplicateInData(
 
 mtpFileLoader::mtpFileLoader(int32 dc, const uint64 &id, const uint64 &access, mtpTypeId locType, const QString &to, int32 size, bool todata) : prev(0), next(0),
 priority(0), inQueue(false), complete(false), triedLocal(false), skippedBytes(0), nextRequestOffset(0), lastComplete(false),
-dc(dc), locationType(locType),
+dc(dc), locationType(locType), volume(0), local(0), secret(0),
 id(id), access(access), file(to), fname(to), fileIsOpen(false), duplicateInData(todata), size(size), type(mtpc_storage_fileUnknown) {
 	LoaderQueues::iterator i = queues.find(MTP::dld[0] + dc);
 	if (i == queues.cend()) {
@@ -171,9 +171,7 @@ bool mtpFileLoader::loadPart() {
 		}
 	}
 
-	if (dcIndex) {
-		App::app()->killDownloadSessionsStop(dc);
-	}
+	App::app()->killDownloadSessionsStop(dc);
 
 	mtpRequestId reqId = MTP::send(MTPupload_GetFile(MTPupload_getFile(loc, MTP_int(offset), MTP_int(limit))), rpcDone(&mtpFileLoader::partLoaded, offset), rpcFail(&mtpFileLoader::partFailed), MTP::dld[dcIndex] + dc, 50);
 
@@ -250,12 +248,23 @@ void mtpFileLoader::partLoaded(int32 offset, const MTPupload_File &result, mtpRe
 		removeFromQueue();
 		App::wnd()->update();
 		App::wnd()->notifyUpdateAllPhotos();
-		if (!queue->queries && dcIndex) {
+		if (!queue->queries) {
 			App::app()->killDownloadSessionsStart(dc);
 		}
 
 		if (!locationType && triedLocal && (fname.isEmpty() || duplicateInData)) {
 			Local::writeImage(storageKey(dc, volume, local), StorageImageSaved(type, data));
+		} else if (locationType && triedLocal) {
+			if (!fname.isEmpty()) {
+				Local::writeFileLocation(mediaKey(locationType, dc, id), FileLocation(type, fname));
+			}
+			if (duplicateInData) {
+				if (locationType == mtpc_inputDocumentFileLocation) {
+					Local::writeSticker(mediaKey(locationType, dc, id), data);
+				} else if (locationType == mtpc_inputAudioFileLocation) {
+					Local::writeAudio(mediaKey(locationType, dc, id), data);
+				}
+			}
 		}
 	}
 	emit progress(this);
@@ -291,11 +300,31 @@ void mtpFileLoader::pause() {
 
 void mtpFileLoader::start(bool loadFirst, bool prior) {
 	if (complete) return;
-	if (!locationType && !triedLocal) {
-		triedLocal = true;
-		StorageImageSaved cached = Local::readImage(storageKey(dc, volume, local));
-		if (cached.type != mtpc_storage_fileUnknown) {
-			data = cached.data;
+	if (!triedLocal) {
+		if (!locationType) {
+			triedLocal = true;
+			StorageImageSaved cached = Local::readImage(storageKey(dc, volume, local));
+			if (cached.type != mtpc_storage_fileUnknown) {
+				data = cached.data;
+				type = cached.type;
+			}
+		} else if (locationType) {
+			if (!fname.isEmpty()) {
+				triedLocal = true;
+			}
+			if (duplicateInData) {
+				if (locationType == mtpc_inputDocumentFileLocation) {
+					triedLocal = true;
+					data = Local::readSticker(mediaKey(locationType, dc, id));
+					if (!data.isEmpty()) type = mtpc_storage_filePartial;
+				} else if (locationType == mtpc_inputAudioFileLocation) {
+					triedLocal = true;
+					data = Local::readAudio(mediaKey(locationType, dc, id));
+					if (!data.isEmpty()) type = mtpc_storage_filePartial;
+				}
+			}
+		}
+		if (triedLocal && !data.isEmpty()) {
 			if (!fname.isEmpty() && duplicateInData) {
 				if (!fileIsOpen) fileIsOpen = file.open(QIODevice::WriteOnly);
 				if (!fileIsOpen) {
@@ -305,7 +334,6 @@ void mtpFileLoader::start(bool loadFirst, bool prior) {
 					return finishFail();
 				}
 			}
-			type = cached.type;
 			complete = true;
 			if (fileIsOpen) {
 				file.close();
@@ -433,18 +461,16 @@ void mtpFileLoader::cancelRequests() {
 	if (requests.isEmpty()) return;
 
 	int32 limit = locationType ? DocumentDownloadPartSize : DownloadPartSize;
-	bool wasIndex = false;
 	DataRequested &dr(_dataRequested[dc]);
 	for (Requests::const_iterator i = requests.cbegin(), e = requests.cend(); i != e; ++i) {
 		MTP::cancel(i.key());
 		int32 dcIndex = i.value();
 		dr.v[dcIndex] -= limit;
-		if (dcIndex) wasIndex = true;
 	}
 	queue->queries -= requests.size();
 	requests.clear();
 
-	if (!queue->queries && wasIndex) {
+	if (!queue->queries) {
 		App::app()->killDownloadSessionsStart(dc);
 	}
 }

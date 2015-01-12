@@ -36,6 +36,8 @@ public:
 	void setText(const QString &text);
 	void setWidth(int32 w);
 
+	int32 textWidth() const;
+
 	~FlatButton() {
 	}
 
@@ -103,7 +105,7 @@ public slots:
 
 	void onStateChange(int oldState, ButtonStateChangeSource source);
 
-private:
+protected:
 
 	QString _text;
 
@@ -114,4 +116,15 @@ private:
 	anim::cvalue a_bg;
 
 	float64 _opacity;
+};
+
+class MaskedButton : public IconedButton {
+	Q_OBJECT
+
+public:
+
+	MaskedButton(QWidget *parent, const style::iconedButton &st, const QString &text = QString());
+
+	void paintEvent(QPaintEvent *e);
+
 };

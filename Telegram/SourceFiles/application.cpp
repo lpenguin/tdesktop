@@ -87,7 +87,7 @@ namespace {
 
 Application::Application(int &argc, char **argv) : PsApplication(argc, argv),
     serverName(psServerPrefix() + cGUIDStr()), closing(false),
-	updateRequestId(0), updateReply(0), updateThread(0), updateDownloader(0) {
+	updateRequestId(0), updateReply(0), updateThread(0), updateDownloader(0), _translator(0) {
 
 	DEBUG_LOG(("Application Info: creation.."));
 
@@ -104,7 +104,10 @@ Application::Application(int &argc, char **argv) : PsApplication(argc, argv),
 
 	installEventFilter(new _DebugWaiter(this));
 
+#if defined Q_OS_LINUX || defined Q_OS_LINUX64
     QFontDatabase::addApplicationFont(qsl(":/gui/art/fonts/DejaVuSans.ttf"));
+    QFontDatabase::addApplicationFont(qsl(":/gui/art/fonts/NanumMyeongjo-Regular.ttf"));
+#endif
     QFontDatabase::addApplicationFont(qsl(":/gui/art/fonts/OpenSans-Regular.ttf"));
     QFontDatabase::addApplicationFont(qsl(":/gui/art/fonts/OpenSans-Bold.ttf"));
     QFontDatabase::addApplicationFont(qsl(":/gui/art/fonts/OpenSans-Semibold.ttf"));
@@ -126,14 +129,31 @@ Application::Application(int &argc, char **argv) : PsApplication(argc, argv),
         cSetIntRetinaFactor(int32(cRetinaFactor()));
     }
 
-	if (!cLangFile().isEmpty()) {
-		LangLoaderPlain loader(cLangFile());
+	if (cLang() < languageTest) {
+		cSetLang(languageId());
+	}
+	if (cLang() == languageTest) {
+		if (QFileInfo(cLangFile()).exists()) {
+			LangLoaderPlain loader(cLangFile());
+			cSetLangErrors(loader.errors());
+			if (!cLangErrors().isEmpty()) {
+				LOG(("Lang load errors: %1").arg(cLangErrors()));
+			} else if (!loader.warnings().isEmpty()) {
+				LOG(("Lang load warnings: %1").arg(loader.warnings()));
+			}
+		} else {
+			cSetLang(languageDefault);
+		}
+	} else if (cLang() > languageDefault && cLang() < languageCount) {
+		LangLoaderPlain loader(qsl(":/langs/lang_") + LanguageCodes[cLang()] + qsl(".strings"));
 		if (!loader.errors().isEmpty()) {
 			LOG(("Lang load errors: %1").arg(loader.errors()));
 		} else if (!loader.warnings().isEmpty()) {
 			LOG(("Lang load warnings: %1").arg(loader.warnings()));
 		}
 	}
+
+	installTranslator(_translator = new Translator());
 
 	Local::start();
 	style::startManager();
@@ -368,8 +388,8 @@ void Application::killDownloadSessions() {
 	uint64 ms = getms(), left = MTPAckSendWaiting + MTPKillFileSessionTimeout;
 	for (QMap<int32, uint64>::iterator i = killDownloadSessionTimes.begin(); i != killDownloadSessionTimes.end(); ) {
 		if (i.value() <= ms) {
-			for (int j = 1; j < MTPDownloadSessionsCount; ++j) {
-				MTP::killSession(MTP::dld[j] + i.key());
+			for (int j = 0; j < MTPDownloadSessionsCount; ++j) {
+				MTP::stopSession(MTP::dld[j] + i.key());
 			}
 			i = killDownloadSessionTimes.erase(i);
 		} else {
@@ -437,15 +457,15 @@ void Application::uploadProfilePhoto(const QImage &tosend, const PeerId &peerId)
 	PreparedPhotoThumbs photoThumbs;
 	QVector<MTPPhotoSize> photoSizes;
 
-	QPixmap thumb = QPixmap::fromImage(tosend.scaled(160, 160, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+	QPixmap thumb = QPixmap::fromImage(tosend.scaled(160, 160, Qt::KeepAspectRatio, Qt::SmoothTransformation), Qt::ColorOnly);
 	photoThumbs.insert('a', thumb);
 	photoSizes.push_back(MTP_photoSize(MTP_string("a"), MTP_fileLocationUnavailable(MTP_long(0), MTP_int(0), MTP_long(0)), MTP_int(thumb.width()), MTP_int(thumb.height()), MTP_int(0)));
 
-	QPixmap medium = QPixmap::fromImage(tosend.scaled(320, 320, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+	QPixmap medium = QPixmap::fromImage(tosend.scaled(320, 320, Qt::KeepAspectRatio, Qt::SmoothTransformation), Qt::ColorOnly);
 	photoThumbs.insert('b', medium);
 	photoSizes.push_back(MTP_photoSize(MTP_string("b"), MTP_fileLocationUnavailable(MTP_long(0), MTP_int(0), MTP_long(0)), MTP_int(medium.width()), MTP_int(medium.height()), MTP_int(0)));
 
-	QPixmap full = QPixmap::fromImage(tosend);
+	QPixmap full = QPixmap::fromImage(tosend, Qt::ColorOnly);
 	photoThumbs.insert('c', full);
 	photoSizes.push_back(MTP_photoSize(MTP_string("c"), MTP_fileLocationUnavailable(MTP_long(0), MTP_int(0), MTP_long(0)), MTP_int(full.width()), MTP_int(full.height()), MTP_int(0)));
 
@@ -461,7 +481,7 @@ void Application::uploadProfilePhoto(const QImage &tosend, const PeerId &peerId)
 	int32 filesize = 0;
 	QByteArray data;
 
-	ReadyLocalMedia ready(ToPreparePhoto, file, filename, filesize, data, id, id, peerId, photo, photoThumbs, MTP_documentEmpty(MTP_long(0)), jpeg, false);
+	ReadyLocalMedia ready(ToPreparePhoto, file, filename, filesize, data, id, id, qsl("jpg"), peerId, photo, photoThumbs, MTP_documentEmpty(MTP_long(0)), jpeg, false);
 
 	connect(App::uploader(), SIGNAL(photoReady(MsgId, const MTPInputFile &)), App::app(), SLOT(photoUpdated(MsgId, const MTPInputFile &)), Qt::UniqueConnection);
 
@@ -677,9 +697,19 @@ void Application::startApp() {
 	}
 
 	QNetworkProxyFactory::setUseSystemConfiguration(true);
-    if (Local::oldMapVersion() < AppVersion) {
+	if (Local::oldMapVersion() < AppVersion) {
 		psRegisterCustomScheme();
+		if (Local::oldMapVersion() && Local::oldMapVersion() < 7005) {
+			QString versionFeatures(lng_new_version7005(lt_version, QString::fromStdWString(AppVersionStr), lt_link, qsl("https://desktop.telegram.org/#changelog")));
+			if (!versionFeatures.isEmpty()) {
+				window->serviceNotification(versionFeatures);
+			}
+		}
 	}
+
+//	if (!cLangErrors().isEmpty()) {
+//		window->showLayer(new ConfirmBox("Custom lang failed :(\n\nError: " + cLangErrors(), true, lang(lng_close)));
+//	}
 }
 
 void Application::socketDisconnected() {
@@ -804,6 +834,8 @@ Application::~Application() {
 
 	style::stopManager();
 	Local::stop();
+
+	delete _translator;
 }
 
 Application *Application::app() {
@@ -814,7 +846,7 @@ Window *Application::wnd() {
 	return mainApp ? mainApp->window : 0;
 }
 
-QString Application::lang() {
+QString Application::language() {
 	if (!lng.length()) {
 		lng = psCurrentLanguage();
 	}
@@ -822,6 +854,16 @@ QString Application::lang() {
 		lng = "en";
 	}
 	return lng;
+}
+
+int32 Application::languageId() {
+	QByteArray l = language().toLatin1();
+	for (int32 i = 0; i < languageCount; ++i) {
+		if (l.at(0) == LanguageCodes[i][0] && l.at(1) == LanguageCodes[i][1]) {
+			return i;
+		}
+	}
+	return languageDefault;
 }
 
 MainWidget *Application::main() {

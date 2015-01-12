@@ -704,7 +704,7 @@ namespace {
 				} else {
 					_psShadowWindows.setColor(_shInactive);
 				}
-				QTimer::singleShot(0, Application::wnd(), SLOT(psUpdateCounter()));
+				QTimer::singleShot(0, Application::wnd(), SLOT(updateCounter()));
 				Application::wnd()->update();
 			} return false;
 				
@@ -860,7 +860,7 @@ namespace {
 
 };
 
-PsMainWindow::PsMainWindow(QWidget *parent) : QMainWindow(parent), ps_hWnd(0), ps_menu(0), icon256(qsl(":/gui/art/icon256.png")), iconbig256(qsl(":/gui/art/iconbig256.png")), wndIcon(QPixmap::fromImage(icon256)),
+PsMainWindow::PsMainWindow(QWidget *parent) : QMainWindow(parent), ps_hWnd(0), ps_menu(0), icon256(qsl(":/gui/art/icon256.png")), iconbig256(qsl(":/gui/art/iconbig256.png")), wndIcon(QPixmap::fromImage(icon256, Qt::ColorOnly)),
 	ps_iconBig(0), ps_iconSmall(0), ps_iconOverlay(0), trayIcon(0), trayIconMenu(0), posInited(false), ps_tbHider_hWnd(createTaskbarHider()), psIdle(false) {
 	tbCreatedMsgId = RegisterWindowMessage(L"TaskbarButtonCreated");
 	connect(&psIdleTimer, SIGNAL(timeout()), this, SLOT(psIdleTimeout()));
@@ -988,10 +988,10 @@ void PsMainWindow::psUpdateCounter() {
 	int32 counter = App::histories().unreadFull;
 	style::color bg = (App::histories().unreadMuted < counter) ? st::counterBG : st::counterMuteBG;
 	QIcon iconSmall, iconBig;
-	iconSmall.addPixmap(QPixmap::fromImage(iconWithCounter(16, counter, bg, true)));
-	iconSmall.addPixmap(QPixmap::fromImage(iconWithCounter(32, counter, bg, true)));
-	iconBig.addPixmap(QPixmap::fromImage(iconWithCounter(32, tbListInterface ? 0 : counter, bg, false)));
-	iconBig.addPixmap(QPixmap::fromImage(iconWithCounter(64, tbListInterface ? 0 : counter, bg, false)));
+	iconSmall.addPixmap(QPixmap::fromImage(iconWithCounter(16, counter, bg, true), Qt::ColorOnly));
+	iconSmall.addPixmap(QPixmap::fromImage(iconWithCounter(32, counter, bg, true), Qt::ColorOnly));
+	iconBig.addPixmap(QPixmap::fromImage(iconWithCounter(32, tbListInterface ? 0 : counter, bg, false), Qt::ColorOnly));
+	iconBig.addPixmap(QPixmap::fromImage(iconWithCounter(64, tbListInterface ? 0 : counter, bg, false), Qt::ColorOnly));
 	if (trayIcon) {
 		trayIcon->setIcon(iconSmall);
 	}
@@ -1005,8 +1005,8 @@ void PsMainWindow::psUpdateCounter() {
 	if (tbListInterface) {
 		if (counter > 0) {
 			QIcon iconOverlay;
-			iconOverlay.addPixmap(QPixmap::fromImage(iconWithCounter(-16, counter, bg, false)));
-			iconOverlay.addPixmap(QPixmap::fromImage(iconWithCounter(-32, counter, bg, false)));
+			iconOverlay.addPixmap(QPixmap::fromImage(iconWithCounter(-16, counter, bg, false), Qt::ColorOnly));
+			iconOverlay.addPixmap(QPixmap::fromImage(iconWithCounter(-32, counter, bg, false), Qt::ColorOnly));
 			ps_iconOverlay = _qt_createHIcon(iconOverlay, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
 		}
 		QString description = counter > 0 ? QString("%1 unread messages").arg(counter) : qsl("No unread messages");
@@ -1047,8 +1047,8 @@ void PsMainWindow::psInitSize() {
 
 	TWindowPos pos(cWindowPos());
 	if (cDebug()) { // temp while design
-		pos.w = 879;
-		pos.h = 689;
+		pos.w = st::wndDefWidth;
+		pos.h = st::wndDefHeight;
 	}
 	QRect avail(QDesktopWidget().availableGeometry());
 	bool maximized = false;
@@ -2209,7 +2209,7 @@ namespace {
 		if (RegQueryValueEx(rkey, value, 0, &defaultType, (BYTE*)defaultStr, &defaultSize) != ERROR_SUCCESS || defaultType != REG_SZ || defaultSize != (v.size() + 1) * 2 || QString::fromStdWString(defaultStr) != v) {
 			WCHAR tmp[bufSize] = { 0 };
 			if (!v.isEmpty()) wsprintf(tmp, v.replace(QChar('%'), qsl("%%")).toStdWString().c_str());
-			LSTATUS status = RegSetValueEx(rkey, 0, 0, REG_SZ, (BYTE*)tmp, (wcslen(tmp) + 1) * sizeof(WCHAR));
+			LSTATUS status = RegSetValueEx(rkey, value, 0, REG_SZ, (BYTE*)tmp, (wcslen(tmp) + 1) * sizeof(WCHAR));
 			if (status != ERROR_SUCCESS) {
 				QString msg = qsl("App Error: could not set %1, error %2").arg(value ? ('\'' + QString::fromStdWString(value) + '\'') : qsl("(Default)")).arg("%1: %2");
 				_psLogError(msg.toUtf8().constData(), status);
@@ -2259,7 +2259,8 @@ void psExecUpdater() {
 }
 
 void psExecTelegram() {
-	QString targs = qsl("-noupdate -tosettings");
+	QString targs = qsl("-noupdate");
+	if (cRestartingToSettings()) targs += qsl(" -tosettings");
 	if (cFromAutoStart()) targs += qsl(" -autostart");
 	if (cDebug()) targs += qsl(" -debug");
 	if (cDataFile() != (cTestMode() ? qsl("data_test") : qsl("data"))) targs += qsl(" -key \"") + cDataFile() + '"';

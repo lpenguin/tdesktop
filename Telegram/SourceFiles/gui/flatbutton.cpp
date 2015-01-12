@@ -23,9 +23,9 @@ FlatButton::FlatButton(QWidget *parent, const QString &text, const style::flatBu
 	_st(st),
 	a_bg(st.bgColor->c), a_text(st.color->c), _opacity(1) {
 	if (_st.width < 0) {
-		_st.width = _st.font->m.width(text) - _st.width;
+		_st.width = textWidth() - _st.width;
 	} else if (!_st.width) {
-		_st.width = _st.font->m.width(text) + _st.height - _st.font->height;
+		_st.width = textWidth() + _st.height - _st.font->height;
 	}
 	connect(this, SIGNAL(stateChanged(int, ButtonStateChangeSource)), this, SLOT(onStateChange(int, ButtonStateChangeSource)));
 	resize(_st.width, _st.height);
@@ -44,7 +44,16 @@ void FlatButton::setText(const QString &text) {
 
 void FlatButton::setWidth(int32 w) {
 	_st.width = w;
+	if (_st.width < 0) {
+		_st.width = textWidth() - _st.width;
+	} else if (!_st.width) {
+		_st.width = textWidth() + _st.height - _st.font->height;
+	}
 	resize(_st.width, height());
+}
+
+int32 FlatButton::textWidth() const {
+	return _st.font->m.width(_text);
 }
 
 bool FlatButton::animStep(float64 ms) {
@@ -211,6 +220,32 @@ void IconedButton::paintEvent(QPaintEvent *e) {
 	const QRect &i((_state & StateDown) ? _st.downIcon : _st.icon);
 	if (i.width()) {
 		const QPoint &t((_state & StateDown) ? _st.downIconPos : _st.iconPos);
+		p.drawPixmap(t, App::sprite(), i);
+	}
+}
+
+MaskedButton::MaskedButton(QWidget *parent, const style::iconedButton &st, const QString &text) : IconedButton(parent, st, text) {
+}
+
+void MaskedButton::paintEvent(QPaintEvent *e) {
+	QPainter p(this);
+
+	p.setOpacity(_opacity);
+
+	p.setOpacity(a_opacity.current() * _opacity);
+
+	if (!_text.isEmpty()) {
+		p.setFont(_st.font->f);
+		p.setRenderHint(QPainter::TextAntialiasing);
+		p.setPen(a_bg.current());
+		const QPoint &t((_state & StateDown) ? _st.downTextPos : _st.textPos);
+		p.drawText(t.x(), t.y() + _st.font->ascent, _text);
+	}
+
+	const style::sprite &i((_state & StateDown) ? _st.downIcon : _st.icon);
+	if (i.pxWidth()) {
+		const QPoint &t((_state & StateDown) ? _st.downIconPos : _st.iconPos);
+		p.fillRect(QRect(t, QSize(i.pxWidth(), i.pxHeight())), a_bg.current());
 		p.drawPixmap(t, App::sprite(), i);
 	}
 }

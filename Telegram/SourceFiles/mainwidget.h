@@ -28,8 +28,9 @@ Copyright (c) 2014 John Preston, https://desktop.telegram.org
 class Window;
 struct DialogRow;
 class MainWidget;
+class ConfirmBox;
 
-class TopBarWidget : public QWidget, public Animated {
+class TopBarWidget : public TWidget, public Animated {
 	Q_OBJECT
 
 public:
@@ -37,7 +38,9 @@ public:
 	TopBarWidget(MainWidget *w);
 
 	void enterEvent(QEvent *e);
+	void enterFromChildEvent(QEvent *e);
 	void leaveEvent(QEvent *e);
+	void leaveToChildEvent(QEvent *e);
 	void paintEvent(QPaintEvent *e);
 	void mousePressEvent(QMouseEvent *e);
 	void resizeEvent(QResizeEvent *e);
@@ -57,6 +60,7 @@ public slots:
 	void onForwardSelection();
 	void onDeleteSelection();
 	void onClearSelection();
+	void onInfoClicked();
 	void onAddContact();
 	void onEdit();
 	void onDeleteContact();
@@ -76,12 +80,15 @@ private:
 
 	uint32 _selCount;
 	QString _selStr;
-	int32 _selStrWidth;
+	int32 _selStrLeft, _selStrWidth;
     
     bool _animating;
 
 	FlatButton _clearSelection;
 	FlatButton _forward, _delete;
+	int32 _selectionButtonsWidth, _forwardDeleteWidth;
+
+	FlatButton _info;
 	FlatButton _edit, _leaveGroup, _addContact, _deleteContact;
 	FlatButton _mediaType;
 
@@ -167,7 +174,12 @@ public:
 	void resizeEvent(QResizeEvent *e);
 	void keyPressEvent(QKeyEvent *e);
 
+	void updateWideMode();
+	bool needBackButton();
+	void onShowDialogs();
+
 	void paintTopBar(QPainter &p, float64 over, int32 decreaseWidth);
+	void topBarShadowParams(int32 &x, float64 &o);
 	TopBarWidget *topBar();
 
 	void animShow(const QPixmap &bgAnimCache, bool back = false);
@@ -177,11 +189,14 @@ public:
 	void openLocalUrl(const QString &str);
 	void openUserByName(const QString &name);
 	void startFull(const MTPVector<MTPUser> &users);
+	bool started();
 	void applyNotifySetting(const MTPNotifyPeer &peer, const MTPPeerNotifySettings &settings, History *history = 0);
 	void gotNotifySetting(MTPInputNotifyPeer peer, const MTPPeerNotifySettings &settings);
 	bool failNotifySetting(MTPInputNotifyPeer peer);
 
 	void updateNotifySetting(PeerData *peer, bool enabled);
+
+	void incrementSticker(DocumentData *sticker);
 
 	void activate();
 
@@ -204,6 +219,7 @@ public:
 
 	void peerBefore(const PeerData *inPeer, MsgId inMsg, PeerData *&outPeer, MsgId &outMsg);
 	void peerAfter(const PeerData *inPeer, MsgId inMsg, PeerData *&outPeer, MsgId &outMsg);
+	PeerData *historyPeer();
 	PeerData *peer();
 	PeerData *activePeer();
 	MsgId activeMsgId();
@@ -229,16 +245,16 @@ public:
 
 	int32 dlgsWidth() const;
 
-	void forwardLayer(bool forwardSelected = false);
+	void forwardLayer(int32 forwardSelected = 0); // -1 - send paths
 	void deleteLayer(int32 selectedCount = -1); // -1 - context item, else selected, -2 - cancel upload
 	void shareContactLayer(UserData *contact);
+	void hiderLayer(HistoryHider *h);
 	void noHider(HistoryHider *destroyed);
 	mtpRequestId onForward(const PeerId &peer, bool forwardSelected);
 	void onShareContact(const PeerId &peer, UserData *contact);
 	void onSendPaths(const PeerId &peer);
 	bool selectingPeer();
 	void offerPeer(PeerId peer);
-	void hidePeerSelect();
 	void focusPeerSelect();
 	void dialogsActivate();
 
@@ -260,6 +276,8 @@ public:
 
 	void checkPeerHistory(PeerData *peer);
 	void checkedHistory(PeerData *peer, const MTPmessages_Messages &result);
+
+	bool sendPhotoFailed(uint64 randomId, const RPCError &e);
 
 	void forwardSelectedItems();
 	void deleteSelectedItems();
@@ -289,6 +307,10 @@ public:
 	void checkLastUpdate(bool afterSleep);
 	void showAddContact();
 	void showNewGroup();
+
+	void serviceNotification(const QString &msg, const MTPMessageMedia &media, bool unread);
+	void serviceHistoryDone(const MTPmessages_Messages &msgs);
+	bool serviceHistoryFail(const RPCError &error);
 
 	~MainWidget();
 
@@ -337,14 +359,23 @@ public slots:
 	void onDocumentsSelect();
 	void onAudiosSelect();
 
+	void onForwardCancel(QObject *obj = 0);
+
+	void onResendAsDocument();
+	void onCancelResend();
+
 private:
 
     void partWasRead(PeerData *peer, const MTPmessages_AffectedHistory &result);
 	void photosLoaded(History *h, const MTPmessages_Messages &msgs, mtpRequestId req);
 
+	bool _started;
+
 	uint64 failedObjId;
 	QString failedFileName;
 	void loadFailed(mtpFileLoader *loader, bool started, const char *retrySlot);
+
+	QList<uint64> _resendImgRandomIds;
 
 	void gotDifference(const MTPupdates_Difference &diff);
 	bool failDifference(const RPCError &e);
@@ -361,6 +392,7 @@ private:
 	bool updateFail(const RPCError &e);
 
 	void usernameResolveDone(const MTPUser &user);
+	bool usernameResolveFail(QString name, const RPCError &error);
 
 	void hideAll();
 	void showAll();
@@ -374,12 +406,12 @@ private:
 
 	int32 _dialogsWidth;
 
-	MTPDuserSelf self;	
 	DialogsWidget dialogs;
 	HistoryWidget history;
 	ProfileWidget *profile;
 	OverviewWidget *overview;
 	TopBarWidget _topBar;
+	ConfirmBox *_forwardConfirm; // for narrow mode
 	HistoryHider *hider;
 	StackItems _stack;
 	QPixmap profileAnimCache;

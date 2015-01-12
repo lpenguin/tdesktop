@@ -46,7 +46,7 @@ namespace {
 MediaView::MediaView() : TWidget(App::wnd()),
 _photo(0), _doc(0), _availBottom(0), _leftNavVisible(false), _rightNavVisible(false), _animStarted(getms()),
 _maxWidth(0), _maxHeight(0), _width(0), _x(0), _y(0), _w(0), _h(0), _xStart(0), _yStart(0),
-_zoom(0), _pressed(false), _dragging(0), _full(-1), _history(0), _peer(0), _user(0), _from(0), _index(-1), _msgid(0),
+_zoom(0), _zoomToScreen(0), _pressed(false), _dragging(0), _full(-1), _history(0), _peer(0), _user(0), _from(0), _index(-1), _msgid(0),
 _loadRequest(0), _over(OverNone), _down(OverNone), _lastAction(-st::medviewDeltaFromLastAction, -st::medviewDeltaFromLastAction),
 _close(this, st::medviewClose),
 _save(this, st::medviewSaveAs, lang(lng_mediaview_save)),
@@ -61,6 +61,8 @@ _saveMsgStarted(0), _saveMsgOpacity(0)
 	_saveMsgText.setRichText(st::medviewSaveMsgFont, lang(lng_mediaview_saved), _textDlgOptions, custom);
 	_saveMsg = QRect(0, 0, _saveMsgText.maxWidth() + st::medviewSaveMsgPadding.left() + st::medviewSaveMsgPadding.right(), st::medviewSaveMsgFont->height + st::medviewSaveMsgPadding.top() + st::medviewSaveMsgPadding.bottom());
 	_saveMsgText.setLink(1, TextLinkPtr(new SaveMsgLink(this)));
+
+	_transparentBrush = QBrush(App::sprite().copy(st::medviewTransparentBrush));
 
 	setWindowFlags(Qt::FramelessWindowHint | Qt::BypassWindowManagerHint | Qt::Tool | Qt::NoDropShadowWindowHint);
 	moveToScreen();
@@ -171,13 +173,13 @@ void MediaView::updateControls() {
 	}
 	QDateTime d(date(_photo ? _photo->date : _doc->date)), dNow(date(unixtime()));
 	if (d.date() == dNow.date()) {
-		_dateText = lang(lng_status_lastseen_today).replace(qsl("{time}"), d.time().toString(qsl("hh:mm")));
+		_dateText = lng_mediaview_today(lt_time, d.time().toString(qsl("hh:mm")));
 	} else if (d.date().addDays(1) == dNow.date()) {
-		_dateText = lang(lng_status_lastseen_yesterday).replace(qsl("{time}"), d.time().toString(qsl("hh:mm")));
+		_dateText = lng_mediaview_yesterday(lt_time, d.time().toString(qsl("hh:mm")));
 	} else {
-		_dateText = lang(lng_status_lastseen_date_time).replace(qsl("{date}"), d.date().toString(qsl("dd.MM.yy"))).replace(qsl("{time}"), d.time().toString(qsl("hh:mm")));
+		_dateText = lng_mediaview_date_time(lt_date, d.date().toString(qsl("dd.MM.yy")), lt_time, d.time().toString(qsl("hh:mm")));
 	}
-	_fromName.setText(st::medviewNameFont, _from->name);
+	if (_from) _fromName.setText(st::medviewNameFont, _from->name);
 	updateHeader();
 	_leftNavVisible = _photo && (_index > 0 || (_index == 0 && _history && _history->_overview[OverviewPhotos].size() < _history->_overviewCount[OverviewPhotos]));
 	_rightNavVisible = _photo && (_index >= 0 && (
@@ -392,12 +394,12 @@ void MediaView::showPhoto(PhotoData *photo, PeerData *context) {
 	_saveMsgStarted = 0;
 	_loadRequest = 0;
 	_over = OverNone;
+	setCursor(style::cur_default);
 	if (!_animations.isEmpty()) {
 		_animations.clear();
 		anim::stop(this);
 	}
 	if (!_animOpacities.isEmpty()) _animOpacities.clear();
-	setCursor(style::cur_default);
 
 	_msgid = 0;
 	_index = -1;
@@ -427,7 +429,6 @@ void MediaView::showDocument(DocumentData *doc, QPixmap pix, HistoryItem *contex
 	_saveMsgStarted = 0;
 	_peer = 0;
 	_user = 0;
-	_zoom = 0;
 	_msgid = context ? context->id : 0;
 	_index = -1;
 	_loadRequest = 0;
@@ -440,9 +441,7 @@ void MediaView::showDocument(DocumentData *doc, QPixmap pix, HistoryItem *contex
 		anim::stop(this);
 	}
 	if (!_animOpacities.isEmpty()) _animOpacities.clear();
-	setCursor(style::cur_default);
 
-	QString name = doc->already();
 	_current = pix;
 	_current.setDevicePixelRatio(cRetinaFactor());
 	_doc = doc;
@@ -452,10 +451,36 @@ void MediaView::showDocument(DocumentData *doc, QPixmap pix, HistoryItem *contex
 	}
 	_w = _current.width() / cIntRetinaFactor();
 	_h = _current.height() / cIntRetinaFactor();
-	_x = (_avail.width() - _w) / 2;
-	_y = st::medviewPolaroid.top() + (_avail.height() - st::medviewPolaroid.top() - st::medviewPolaroid.bottom() - st::medviewBottomBar - _h) / 2;
 	_width = _w;
-	_from = App::user(_doc->user);
+	if (_w > 0 && _h > 0) {
+		_zoomToScreen = float64(_avail.width()) / _w;
+		if (_h * _zoomToScreen > (_avail.height() - st::medviewBottomBar)) {
+			_zoomToScreen = float64(_avail.height() - st::medviewBottomBar) / _h;
+		}
+		if (_zoomToScreen >= 1.) {
+			_zoomToScreen -= 1.;
+		} else {
+			_zoomToScreen = 1. - (1. / _zoomToScreen);
+		}
+	} else {
+		_zoomToScreen = 0;
+	}
+	if ((_w > _avail.width()) || (_h > (_avail.height() - st::medviewBottomBar))) {
+		_zoom = ZoomToScreenLevel;
+		if (_zoomToScreen >= 0) {
+			_w = qRound(_w * (_zoomToScreen + 1));
+			_h = qRound(_h * (_zoomToScreen + 1));
+		} else {
+			_w = qRound(_w / (-_zoomToScreen + 1));
+			_h = qRound(_h / (-_zoomToScreen + 1));
+		}
+		snapXY();
+	} else {
+		_zoom = 0;
+	}
+	_x = (_avail.width() - _w) / 2;
+	_y = (_avail.height() - st::medviewBottomBar - _h) / 2;
+	_from = context ? context->from()->asUser() : 0;
 	_full = 1;
 	updateControls();
 	if (isHidden()) {
@@ -469,6 +494,7 @@ void MediaView::showPhoto(PhotoData *photo) {
 	_photo = photo;
 	_doc = 0;
 	_zoom = 0;
+	_zoomToScreen = 0;
 	MTP::clearLoaderPriorities();
 	_full = -1;
 	_current = QPixmap();
@@ -555,6 +581,9 @@ void MediaView::paintEvent(QPaintEvent *e) {
 	if (_photo || !_current.isNull()) {
 		QRect imgRect(_x, _y, _w, _h);
 		if (imgRect.intersects(r)) {
+			if (_current.hasAlpha()) {
+				p.fillRect(imgRect, _transparentBrush);
+			}
 			if (_zoom) {
 				bool was = (p.renderHints() & QPainter::SmoothPixmapTransform);
 				if (!was) p.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -564,7 +593,7 @@ void MediaView::paintEvent(QPaintEvent *e) {
 				p.drawPixmap(_x, _y, _current);
 			}
 		}
-		if (_polaroidOut.intersects(r)) {
+		if (!_doc && _polaroidOut.intersects(r)) {
 			// polaroid
 			p.fillRect(_polaroidOut.x(), _polaroidOut.y(), _polaroidIn.x() - _polaroidOut.x(), _polaroidOut.height(), st::white->b);
 			p.fillRect(_polaroidIn.x() + _polaroidIn.width(), _polaroidOut.y(), _polaroidOut.x() + _polaroidOut.width() - _polaroidIn.x() - _polaroidIn.width(), _polaroidOut.height(), st::white->b);
@@ -573,10 +602,10 @@ void MediaView::paintEvent(QPaintEvent *e) {
 		}
 		if (imgRect.intersects(r)) {
 			uint64 ms = 0;
-			if (imgRect.intersects(_leftNav)) {
+			if (!_doc && imgRect.intersects(_leftNav)) {
 				p.fillRect(imgRect.intersected(_leftNav), _leftNavVisible ? overColor(st::medviewBG->c, 1, st::black->c, overLevel(OverLeftNav) * st::medviewNavBGOpacity) : st::medviewBG->c);
 			}
-			if (imgRect.intersects(_rightNav)) {
+			if (!_doc && imgRect.intersects(_rightNav)) {
 				p.fillRect(imgRect.intersected(_rightNav), _rightNavVisible ? overColor(st::medviewBG->c, 1, st::black->c, overLevel(OverRightNav) * st::medviewNavBGOpacity) : st::medviewBG->c);
 			}
 			if (imgRect.intersects(_bottomBar)) {
@@ -685,15 +714,33 @@ void MediaView::paintEvent(QPaintEvent *e) {
 	}
 
 	// name
-	p.setPen(st::medviewNameColor->p);
-	if (_over == OverName) _fromName.replaceFont(st::medviewNameFont->underline());
-	if (_nameNav.intersects(r)) _fromName.drawElided(p, _nameNav.left(), _nameNav.top(), _nameNav.width());
-	if (_over == OverName) _fromName.replaceFont(st::medviewNameFont);
+	if (_doc) {
+		float64 o = overLevel(OverName);
+		p.setOpacity(st::medviewOverview.overOpacity * o + st::medviewOverview.opacity * (1 - o));
+		p.setPen(st::white->p);
+	} else {
+		p.setPen(st::medviewNameColor->p);
+	}
+	if (_from) {
+		if (_nameNav.intersects(r)) {
+			if (_over == OverName) _fromName.replaceFont(st::medviewNameFont->underline());
+			_fromName.drawElided(p, _nameNav.left(), _nameNav.top(), _nameNav.width());
+			if (_over == OverName) _fromName.replaceFont(st::medviewNameFont);
+		}
+	}
 
 	// date
-	p.setPen(st::medviewDateColor->p);
-	p.setFont((_over == OverDate ? st::medviewDateFont->underline() : st::medviewDateFont)->f);
-	if (_dateNav.intersects(r)) p.drawText(_dateNav.left(), _dateNav.top() + st::medviewDateFont->ascent, _dateText);
+	if (_dateNav.intersects(r)) {
+		if (_doc) {
+			float64 o = overLevel(OverDate);
+			p.setOpacity(st::medviewOverview.overOpacity * o + st::medviewOverview.opacity * (1 - o));
+			p.setPen(st::white->p);
+		} else {
+			p.setPen(st::medviewDateColor->p);
+		}
+		p.setFont((_over == OverDate ? st::medviewDateFont->underline() : st::medviewDateFont)->f);
+		p.drawText(_dateNav.left(), _dateNav.top() + st::medviewDateFont->ascent, _dateText);
+	}
 }
 
 void MediaView::keyPressEvent(QKeyEvent *e) {
@@ -707,53 +754,85 @@ void MediaView::keyPressEvent(QKeyEvent *e) {
 		moveToPhoto(-1);
 	} else if (e->key() == Qt::Key_Right) {
 		moveToPhoto(1);
-	} else if (e->modifiers().testFlag(Qt::ControlModifier) && (e->key() == Qt::Key_Plus || e->key() == Qt::Key_Equal || e->key() == Qt::Key_Minus || e->key() == Qt::Key_Underscore || e->key() == Qt::Key_0)) {
+    } else if (e->modifiers().testFlag(Qt::ControlModifier) && (e->key() == Qt::Key_Plus || e->key() == Qt::Key_Equal || e->key() == ']' || e->key() == Qt::Key_Asterisk || e->key() == Qt::Key_Minus || e->key() == Qt::Key_Underscore || e->key() == Qt::Key_0)) {
 		int32 newZoom = _zoom;
-		if (e->key() == Qt::Key_Plus || e->key() == Qt::Key_Equal) {
-			if (newZoom < MaxZoomLevel) ++newZoom;
-		} else if (e->key() == Qt::Key_Minus || e->key() == Qt::Key_Underscore) {
-			if (newZoom > -MaxZoomLevel) --newZoom;
-		} else {
-			newZoom = 0;
-			_x = -_width / 2;
-			_y = st::medviewPolaroid.top() - ((_current.height() / cIntRetinaFactor()) / 2);
-			if (_zoom >= 0) {
-				_x *= _zoom + 1;
-				_y *= _zoom + 1;
+        if (e->key() == Qt::Key_Plus || e->key() == Qt::Key_Equal || e->key() == Qt::Key_Asterisk || e->key() == ']') {
+			if (newZoom == ZoomToScreenLevel) {
+				if (qCeil(_zoomToScreen) <= MaxZoomLevel) {
+					newZoom = qCeil(_zoomToScreen);
+				}
 			} else {
-				_x /= -_zoom + 1;
-				_y /= -_zoom + 1;
+				if (newZoom < _zoomToScreen && (newZoom + 1 > _zoomToScreen || (_zoomToScreen > MaxZoomLevel && newZoom == MaxZoomLevel))) {
+					newZoom = ZoomToScreenLevel;
+				} else if (newZoom < MaxZoomLevel) {
+					++newZoom;
+				}
+			}
+		} else if (e->key() == Qt::Key_Minus || e->key() == Qt::Key_Underscore) {
+			if (newZoom == ZoomToScreenLevel) {
+				if (qFloor(_zoomToScreen) >= -MaxZoomLevel) {
+					newZoom = qFloor(_zoomToScreen);
+				}
+			} else {
+				if (newZoom > _zoomToScreen && (newZoom - 1 < _zoomToScreen || (_zoomToScreen < -MaxZoomLevel && newZoom == -MaxZoomLevel))) {
+					newZoom = ZoomToScreenLevel;
+				} else if (newZoom > -MaxZoomLevel) {
+					--newZoom;
+				}
+			}
+		} else {
+			if (_zoom == 0) {
+				if (qFloor(_zoomToScreen) == qCeil(_zoomToScreen) && qRound(_zoomToScreen) >= -MaxZoomLevel && qRound(_zoomToScreen) <= MaxZoomLevel) {
+					newZoom = qRound(_zoomToScreen);
+				} else {
+					newZoom = ZoomToScreenLevel;
+				}
+			} else {
+				newZoom = 0;
+			}
+			_x = -_width / 2;
+			_y = (_doc ? 0 : st::medviewPolaroid.top()) - ((_current.height() / cIntRetinaFactor()) / 2);
+			float64 z = (_zoom == ZoomToScreenLevel) ? _zoomToScreen : _zoom;
+			if (z >= 0) {
+				_x = qRound(_x * (z + 1));
+				_y = qRound(_y * (z + 1));
+			} else {
+				_x = qRound(_x / (-z + 1));
+				_y = qRound(_y / (-z + 1));
 			}
 			_x += _avail.width() / 2;
-			_y += (_avail.height() - st::medviewBottomBar - st::medviewPolaroid.top() - st::medviewPolaroid.bottom()) / 2;
+			_y += (_avail.height() - st::medviewBottomBar - (_doc ? 0 : (st::medviewPolaroid.top() + st::medviewPolaroid.bottom()))) / 2;
 			updatePolaroid();
 			update();
 		}
-		while ((newZoom < 0 && (-newZoom + 1) > _w) || (-newZoom + 1) > _h) {
-			++newZoom;
+		if (newZoom != ZoomToScreenLevel) {
+			while ((newZoom < 0 && (-newZoom + 1) > _w) || (-newZoom + 1) > _h) {
+				++newZoom;
+			}
 		}
 		if (_zoom != newZoom) {
-			float64 nx, ny;
+			float64 nx, ny, z = (_zoom == ZoomToScreenLevel) ? _zoomToScreen : _zoom;
 			_w = _current.width() / cIntRetinaFactor();
 			_h = _current.height() / cIntRetinaFactor();
-			if (_zoom >= 0) {
-				nx = (_x - _avail.width() / 2.) / float64(_zoom + 1);
-				ny = (_y - _avail.height() / 2.) / float64(_zoom + 1);
+			if (z >= 0) {
+				nx = (_x - _avail.width() / 2.) / (z + 1);
+				ny = (_y - _avail.height() / 2.) / (z + 1);
 			} else {
-				nx = (_x - _avail.width() / 2.) * float64(-_zoom + 1);
-				ny = (_y - _avail.height() / 2.) * float64(-_zoom + 1);
+				nx = (_x - _avail.width() / 2.) * (-z + 1);
+				ny = (_y - _avail.height() / 2.) * (-z + 1);
 			}
 			_zoom = newZoom;
-			if (_zoom > 0) {
-				_w *= _zoom + 1;
-				_h *= _zoom + 1;
-				_x = int32(nx * (_zoom + 1) + _avail.width() / 2.);
-				_y = int32(ny * (_zoom + 1) + _avail.height() / 2.);
+			z = (_zoom == ZoomToScreenLevel) ? _zoomToScreen : _zoom;
+			if (z > 0) {
+				_w = qRound(_w * (z + 1));
+				_h = qRound(_h * (z + 1));
+				_x = qRound(nx * (z + 1) + _avail.width() / 2.);
+				_y = qRound(ny * (z + 1) + _avail.height() / 2.);
 			} else {
-				_w /= (-_zoom + 1);
-				_h /= (-_zoom + 1);
-				_x = int32(nx / (-_zoom + 1) + _avail.width() / 2.);
-				_y = int32(ny / (-_zoom + 1) + _avail.height() / 2.);
+				_w = qRound(_w / (-z + 1));
+				_h = qRound(_h / (-z + 1));
+				_x = qRound(nx / (-z + 1) + _avail.width() / 2.);
+				_y = qRound(ny / (-z + 1) + _avail.height() / 2.);
 			}
 			snapXY();
 			update();
@@ -864,12 +943,12 @@ void MediaView::mousePressEvent(QMouseEvent *e) {
 }
 
 void MediaView::snapXY() {
-	int32 xmin = _avail.width() - _w - st::medviewNavBarWidth - st::medviewPolaroid.right(), xmax = st::medviewPolaroid.left() + st::medviewNavBarWidth;
-	int32 ymin = _avail.height() - _h - st::medviewPolaroid.bottom() - st::medviewBottomBar, ymax = st::medviewPolaroid.top();
+	int32 xmin = _avail.width() - _w - (_doc ? 0 : (st::medviewNavBarWidth + st::medviewPolaroid.right())), xmax = _doc ? 0 : (st::medviewPolaroid.left() + st::medviewNavBarWidth);
+	int32 ymin = _avail.height() - _h - (_doc ? 0 : st::medviewPolaroid.bottom()) - st::medviewBottomBar, ymax = (_doc ? 0 : st::medviewPolaroid.top());
 	if (xmin > (_avail.width() - _w) / 2) xmin = (_avail.width() - _w) / 2;
 	if (xmax < (_avail.width() - _w) / 2) xmax = (_avail.width() - _w) / 2;
-	if (ymin > (_avail.height() - _h - st::medviewBottomBar - st::medviewPolaroid.bottom() + st::medviewPolaroid.top()) / 2) ymin = (_avail.height() - _h - st::medviewBottomBar - st::medviewPolaroid.bottom() + st::medviewPolaroid.top()) / 2;
-	if (ymax < (_avail.height() - _h - st::medviewBottomBar - st::medviewPolaroid.bottom() + st::medviewPolaroid.top()) / 2) ymax = (_avail.height() - _h - st::medviewBottomBar - st::medviewPolaroid.bottom() + st::medviewPolaroid.top()) / 2;
+	if (ymin > (_avail.height() - _h - st::medviewBottomBar - (_doc ? 0 : (st::medviewPolaroid.bottom() - st::medviewPolaroid.top()))) / 2) ymin = (_avail.height() - _h - st::medviewBottomBar - (_doc ? 0 : (st::medviewPolaroid.bottom() - st::medviewPolaroid.top()))) / 2;
+	if (ymax < (_avail.height() - _h - st::medviewBottomBar - (_doc ? 0 : (st::medviewPolaroid.bottom() - st::medviewPolaroid.top()))) / 2) ymax = (_avail.height() - _h - st::medviewBottomBar - (_doc ? 0 : (st::medviewPolaroid.bottom() - st::medviewPolaroid.top()))) / 2;
 	if (_x < xmin) _x = xmin;
 	if (_x > xmax) _x = xmax;
 	if (_y < ymin) _y = ymin;
@@ -886,7 +965,7 @@ void MediaView::mouseMoveEvent(QMouseEvent *e) {
 		if (!_dragging && (e->pos() - _mStart).manhattanLength() >= QApplication::startDragDistance()) {
 			_dragging = QRect(_x, _y, _w, _h).contains(_mStart) ? 1 : -1;
 			if (_dragging > 0) {
-				if (_w > _avail.width() - 2 * st::medviewNavBarWidth - st::medviewPolaroid.left() - st::medviewPolaroid.right() || _h > _avail.height() - st::medviewPolaroid.top() - st::medviewPolaroid.bottom() - st::medviewBottomBar) {
+				if (_w > _avail.width() - (_doc ? 0 : (2 * st::medviewNavBarWidth + st::medviewPolaroid.left() + st::medviewPolaroid.right())) || _h > _avail.height() - (_doc ? 0 : (st::medviewPolaroid.top() + st::medviewPolaroid.bottom())) - st::medviewBottomBar) {
 					setCursor(style::cur_sizeall);
 				} else {
 					setCursor(style::cur_default);
@@ -987,7 +1066,7 @@ void MediaView::mouseReleaseEvent(QMouseEvent *e) {
 	}
 	textlnkDown(TextLinkPtr());
 	if (_over == OverName && _down == OverName) {
-		if (App::wnd()) {
+		if (App::wnd() && _from) {
 			onClose();
 			if (App::main()) App::main()->showPeerProfile(_from);
 		}
@@ -1121,6 +1200,21 @@ bool MediaView::event(QEvent *e) {
 				return true;
 			}
 		}
+	} else if (e->type() == QEvent::Wheel) {
+		QWheelEvent *ev = static_cast<QWheelEvent*>(e);
+		if (ev->phase() == Qt::ScrollBegin) {
+			_accumScroll = ev->angleDelta();
+		} else {
+			_accumScroll += ev->angleDelta();
+			if (ev->phase() == Qt::ScrollEnd) {
+				if (ev->orientation() == Qt::Horizontal) {
+					if (_accumScroll.x() * _accumScroll.x() > _accumScroll.y() * _accumScroll.y() && _accumScroll.x() != 0) {
+						moveToPhoto(_accumScroll.x() > 0 ? -1 : 1);
+					}
+					_accumScroll = QPoint();
+				}
+			}
+		}
 	}
 	return QWidget::event(e);
 }
@@ -1148,7 +1242,7 @@ void MediaView::receiveMouse() {
 
 void MediaView::onCheckActive() {
 	if (App::wnd() && isVisible()) {
-		if (App::wnd()->isActiveWindow()) {
+		if (App::wnd()->isActiveWindow() && App::wnd()->hasFocus()) {
 			activateWindow();
 			setFocus();
 		}
@@ -1226,7 +1320,7 @@ void MediaView::updateHeader() {
 		count = _user->photosCount ? _user->photosCount : _user->photos.size();
 	}
 	if (_index >= 0 && _index < count && count > 1) {
-		_header = lang(lng_mediaview_n_of_count).replace(qsl("{n}"), QString::number(index + 1)).replace(qsl("{count}"), QString::number(count));
+		_header = lng_mediaview_n_of_count(lt_n, QString::number(index + 1), lt_count, QString::number(count));
 		_overview.setText(_header);
 		if (_history) {
 			if (_overview.isHidden()) _overview.show();
@@ -1246,43 +1340,65 @@ void MediaView::updateHeader() {
 }
 
 void MediaView::updatePolaroid() {
-	int32 pminw = qMin(st::medviewPolaroidMin.width(), int(_avail.width() - 2 * st::medviewNavBarWidth));
+	if (_doc) {
+		_polaroidIn = _polaroidOut = QRect(0, 0, _avail.width(), _avail.height() - st::medviewBottomBar);
+		int32 minus1 = width() - _delete.x(), minus2 = _overview.x() + st::medviewHeaderFont->m.width(_header) - st::medviewOverview.width;
+		if (minus2 > minus1) minus1 = minus2;
 
-	int32 pl = _x - st::medviewPolaroid.left(), plw = st::medviewPolaroid.left();
-	if (pl < st::medviewNavBarWidth) pl = st::medviewNavBarWidth;
-	int32 pr = _x + _w + st::medviewPolaroid.right(), prw = st::medviewPolaroid.right();
-	if (pr > _avail.width() - st::medviewNavBarWidth) pr = _avail.width() - st::medviewNavBarWidth;
+		int32 dateWidth = st::medviewDateFont->m.width(_dateText), maxWidth = width() - 2 * minus1;
+		if (_from) {
+			int32 nameWidth = _fromName.maxWidth();
+			if (maxWidth < dateWidth) {
+				maxWidth = dateWidth;
+			}
+			if (nameWidth > maxWidth) {
+				nameWidth = maxWidth;
+			}
+			_nameNav = QRect((_avail.width() - nameWidth) / 2, _avail.y() + _avail.height() - ((st::medviewPolaroid.bottom() + st::medviewBottomBar) / 2) + st::medviewNameTop, nameWidth, st::medviewNameFont->height);
+			_dateNav = QRect((_avail.width() - dateWidth) / 2, _avail.y() + _avail.height() - ((st::medviewPolaroid.bottom() + st::medviewBottomBar) / 2) + st::medviewDateTop, dateWidth, st::medviewDateFont->height);
+		} else {
+			_nameNav = QRect(_avail.x() - 1, _avail.y() - 1, 0, 0);
+			_dateNav = QRect((_avail.width() - dateWidth) / 2, _avail.y() + _avail.height() - ((st::medviewPolaroid.bottom() + st::medviewBottomBar) / 2) + ((st::medviewNameTop + st::medviewDateTop) / 2), dateWidth, st::medviewDateFont->height);
+		}
+	} else {
+		int32 pminw = qMin(st::medviewPolaroidMin.width(), int(_avail.width() - 2 * st::medviewNavBarWidth));
 
-	if (_w + st::medviewPolaroid.left() + st::medviewPolaroid.right() < pminw) {
-		pl = (_avail.width() - pminw) / 2;
-		plw = _x - pl;
-		pr = pl + pminw;
-		prw = pr - (_x + _w);
+		int32 pl = _x - st::medviewPolaroid.left(), plw = st::medviewPolaroid.left();
+		if (pl < st::medviewNavBarWidth) pl = st::medviewNavBarWidth;
+		int32 pr = _x + _w + st::medviewPolaroid.right(), prw = st::medviewPolaroid.right();
+		if (pr > _avail.width() - st::medviewNavBarWidth) pr = _avail.width() - st::medviewNavBarWidth;
+
+		if (_w + st::medviewPolaroid.left() + st::medviewPolaroid.right() < pminw) {
+			pl = (_avail.width() - pminw) / 2;
+			plw = _x - pl;
+			pr = pl + pminw;
+			prw = pr - (_x + _w);
+		}
+
+		int32 pminh = qMin(st::medviewPolaroidMin.height(), int(_avail.height() - st::medviewBottomBar));
+
+		int32 pt = _y - st::medviewPolaroid.top(), pth = st::medviewPolaroid.top();
+		if (pt < 0) pt = 0;
+		int32 pb = _y + _h + st::medviewPolaroid.bottom(), pbh = st::medviewPolaroid.bottom();
+		if (pb > _avail.height() - st::medviewBottomBar) pb = _avail.height() - st::medviewBottomBar;
+
+		if (_h + st::medviewPolaroid.top() + st::medviewPolaroid.bottom() < pminh) {
+			pt = (_avail.height() - st::medviewBottomBar - pminh) / 2;
+			pth = _y - pt;
+			pb = pt + pminh;
+			pbh = pb - (_y + _h);
+		}
+
+		_polaroidOut = QRect(pl, pt, pr - pl, pb - pt);
+		_polaroidIn = QRect(pl + plw, pt + pth, pr - pl - prw - plw, pb - pt - pbh - pth);
+
+		int32 nameWidth = _fromName.maxWidth(), maxWidth = _polaroidOut.width() - st::medviewPolaroid.left() - st::medviewPolaroid.right(), dateWidth = st::medviewDateFont->m.width(_dateText);
+		if (nameWidth > maxWidth) {
+			nameWidth = maxWidth;
+		}
+		_nameNav = QRect(_polaroidIn.x() + ((_polaroidIn.width() - nameWidth) / 2), _polaroidOut.y() + _polaroidOut.height() - st::medviewPolaroid.bottom() + st::medviewNameTop, nameWidth, st::medviewNameFont->height);
+		_dateNav = QRect(_polaroidIn.x() + ((_polaroidIn.width() - dateWidth) / 2), _polaroidOut.y() + _polaroidOut.height() - st::medviewPolaroid.bottom() + st::medviewDateTop, dateWidth, st::medviewDateFont->height);
 	}
-
-	int32 pminh = qMin(st::medviewPolaroidMin.height(), int(_avail.height() - st::medviewBottomBar));
-
-	int32 pt = _y - st::medviewPolaroid.top(), pth = st::medviewPolaroid.top();
-	if (pt < 0) pt = 0;
-	int32 pb = _y + _h + st::medviewPolaroid.bottom(), pbh = st::medviewPolaroid.bottom();
-	if (pb > _avail.height() - st::medviewBottomBar) pb = _avail.height() - st::medviewBottomBar;
-
-	if (_h + st::medviewPolaroid.top() + st::medviewPolaroid.bottom() < pminh) {
-		pt = (_avail.height() - st::medviewBottomBar - pminh) / 2;
-		pth = _y - pt;
-		pb = pt + pminh;
-		pbh = pb - (_y + _h);
-	}
-
-	_polaroidOut = QRect(pl, pt, pr - pl, pb - pt);
-	_polaroidIn = QRect(pl + plw, pt + pth, pr - pl - prw - plw, pb - pt - pbh - pth);
-
-	int32 nameWidth = _fromName.maxWidth(), maxWidth = _polaroidOut.width() - st::medviewPolaroid.left() - st::medviewPolaroid.right(), dateWidth = st::medviewDateFont->m.width(_dateText);
-	if (nameWidth > maxWidth) {
-		nameWidth = maxWidth;
-	}
-	_nameNav = QRect(_polaroidIn.x() + ((_polaroidIn.width() - nameWidth) / 2), _polaroidOut.y() + _polaroidOut.height() - st::medviewPolaroid.bottom() + st::medviewNameTop, nameWidth, st::medviewNameFont->height);
-	_dateNav = QRect(_polaroidIn.x() + ((_polaroidIn.width() - dateWidth) / 2), _polaroidOut.y() + _polaroidOut.height() - st::medviewPolaroid.bottom() + st::medviewDateTop, dateWidth, st::medviewDateFont->height);
 }
 
 QColor MediaView::overColor(const QColor &a, float64 ca, const QColor &b, float64 cb) {

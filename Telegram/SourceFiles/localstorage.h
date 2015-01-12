@@ -30,15 +30,20 @@ namespace _local_inner {
 
 		void writeMap(bool fast);
 		void writingMap();
+		void writeLocations(bool fast);
+		void writingLocations();
 		void finish();
 
 	public slots:
 
 		void mapWriteTimeout();
+		void locationsWriteTimeout();
 
 	private:
 
 		QTimer _mapWriteTimer;
+		QTimer _locationsWriteTimer;
+
 	};
 
 }
@@ -54,7 +59,7 @@ namespace Local {
 	enum ClearManagerTask {
 		ClearManagerAll = 0xFFFF,
 		ClearManagerDownloads = 0x01,
-		ClearManagerImages = 0x02,
+		ClearManagerStorage = 0x02,
 	};
 
 	struct ClearManagerData;
@@ -94,10 +99,26 @@ namespace Local {
 	MessageCursor readDraftPositions(const PeerId &peer);
 	bool hasDraftPositions(const PeerId &peer);
 
+	void writeFileLocation(const StorageKey &location, const FileLocation &local);
+	FileLocation readFileLocation(const StorageKey &location, bool check = true);
+
 	void writeImage(const StorageKey &location, const ImagePtr &img);
 	void writeImage(const StorageKey &location, const StorageImageSaved &jpeg, bool overwrite = true);
 	StorageImageSaved readImage(const StorageKey &location);
 	int32 hasImages();
-	qint64 storageFilesSize();
+	qint64 storageImagesSize();
+
+	void writeSticker(const StorageKey &location, const QByteArray &data, bool overwrite = true);
+	QByteArray readSticker(const StorageKey &location);
+	int32 hasStickers();
+	qint64 storageStickersSize();
+
+	void writeAudio(const StorageKey &location, const QByteArray &data, bool overwrite = true);
+	QByteArray readAudio(const StorageKey &location);
+	int32 hasAudios();
+	qint64 storageAudiosSize();
+
+	void writeRecentStickers();
+	void readRecentStickers();
 
 };
